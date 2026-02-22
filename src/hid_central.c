@@ -86,6 +86,9 @@ static struct k_work connect_work;
 static bt_addr_le_t pending_addr;
 static bool pending_connect;
 
+/* Flag: discovery is waiting for security to be established */
+static bool discover_after_security;
+
 /* ------------------------------------------------------------------ */
 /* Forward declarations                                               */
 /* ------------------------------------------------------------------ */
@@ -447,9 +450,6 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 
     schedule_reconnect();
 }
-
-/* Flag: discovery is waiting for security to be established */
-static bool discover_after_security;
 
 static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
                                  enum bt_security_err err)
