@@ -410,9 +410,19 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
     }
     
     if (!scanning) {
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+        /* Even when scanner is not started, forward connectable ads to HID Central */
+        if (type == BT_GAP_ADV_TYPE_ADV_IND ||
+            type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
+            extern void hid_central_on_scan_result(const bt_addr_le_t *addr,
+                                                    int8_t rssi, uint8_t type,
+                                                    struct net_buf_simple *buf);
+            hid_central_on_scan_result(addr, rssi, type, buf);
+        }
+#endif
         return;
     }
-    
+
     const struct zmk_status_adv_data *prospector_data = NULL;
     
     // Parse advertisement data to extract both name and Prospector data
@@ -528,8 +538,11 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
     }
 
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-    /* Forward connectable advertisements to HID Central for dongle mode */
-    if (type == BT_GAP_ADV_TYPE_ADV_IND) {
+    /* Forward connectable advertisements to HID Central for dongle mode.
+     * Accept ADV_IND (undirected connectable) and ADV_DIRECT_IND (directed).
+     * Also accept scan responses which may carry the device name. */
+    if (type == BT_GAP_ADV_TYPE_ADV_IND ||
+        type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
         extern void hid_central_on_scan_result(const bt_addr_le_t *addr,
                                                 int8_t rssi, uint8_t type,
                                                 struct net_buf_simple *buf);
