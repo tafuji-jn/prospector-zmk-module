@@ -93,7 +93,8 @@ static bool discover_after_security;
 
 /* Flag: PSA diagnostic test already run */
 static bool psa_diag_done;
-static int psa_test_result = -999; /* -999 = not yet run */
+static int psa_test_result = -999;     /* -999 = not yet run */
+static int psa_bt_rx_result = -999;    /* PSA test on BT RX thread */
 
 /* ------------------------------------------------------------------ */
 /* Forward declarations                                               */
@@ -409,6 +410,14 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     printk("*** DONGLE: Connected to %s ***\n", addr_str);
     LOG_INF("Connected to %s", addr_str);
 
+    /* PSA test on BT RX thread (connected_cb runs on BT RX thread).
+     * This tells us if the -135 is thread-specific or key-data-specific. */
+    if (psa_bt_rx_result == -999) {
+        test_psa_import();
+        psa_bt_rx_result = psa_test_result;
+        printk("*** DONGLE v10: PSA_BT_RX_TEST=%d ***\n", psa_bt_rx_result);
+    }
+
     state = STATE_CONNECTING;
 
     /* Request security – GATT discovery will start in security_changed_cb
@@ -633,12 +642,9 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v8: ECC_PUB=%d BT_ECC=%d P256M=%d MAX_CONN=%d PSA_TEST=%d ***\n",
-           IS_ENABLED(CONFIG_PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY),
-           IS_ENABLED(CONFIG_BT_ECC),
-           IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED),
-           CONFIG_BT_MAX_CONN,
-           psa_test_result);
+    printk("*** DONGLE v10: PSA_WQ=%d PSA_RX=%d P256M=%d ***\n",
+           psa_test_result, psa_bt_rx_result,
+           IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
     /* One-time PSA import test with known-valid key */
     if (!psa_diag_done) {
