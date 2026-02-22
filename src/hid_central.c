@@ -97,6 +97,9 @@ static int psa_test_result = -999;     /* -999 = not yet run */
 static int psa_bt_rx_result = -999;    /* PSA test on BT RX thread */
 static int psa_test_nousage = -999;    /* test with usage_flags=0 (like bt_pub_key_is_valid) */
 
+/* Forward declaration for hex_format (defined in v18 section) */
+static void hex_format(char *out, const uint8_t *data, size_t len);
+
 /* ------------------------------------------------------------------ */
 /* Forward declarations                                               */
 /* ------------------------------------------------------------------ */
@@ -411,12 +414,21 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     printk("*** DONGLE: Connected to %s ***\n", addr_str);
     LOG_INF("Connected to %s", addr_str);
 
-    /* PSA test on BT RX thread (connected_cb runs on BT RX thread).
-     * This tells us if the -135 is thread-specific or key-data-specific. */
-    if (psa_bt_rx_result == -999) {
-        test_psa_import();
-        psa_bt_rx_result = psa_test_result;
-        printk("*** DONGLE v10: PSA_BT_RX_TEST=%d ***\n", psa_bt_rx_result);
+    /* v19: Dump our own BLE address and public key for DHKey verification */
+    {
+        struct bt_le_oob oob;
+        if (bt_le_oob_get_local(BT_ID_DEFAULT, &oob) == 0) {
+            bt_addr_le_to_str(&oob.addr, addr_str, sizeof(addr_str));
+            printk("*** DONGLE: Our addr: %s ***\n", addr_str);
+        }
+        const uint8_t *our_pk = bt_pub_key_get();
+        if (our_pk) {
+            char hbuf[65];
+            hex_format(hbuf, our_pk, 32);
+            printk("*** OUR_PK_X: %s ***\n", hbuf);
+            hex_format(hbuf, our_pk + 32, 32);
+            printk("*** OUR_PK_Y: %s ***\n", hbuf);
+        }
     }
 
     state = STATE_CONNECTING;
@@ -643,7 +655,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v18b: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX ***\n",
+    printk("*** DONGLE v19: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX+DHKEY_DUMP ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -1004,12 +1016,26 @@ bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
 extern int __real_bt_dh_key_gen(const uint8_t remote_pk[64],
                                 void (*cb)(const uint8_t key[32]));
 
+/* v19: Intercept DH key callback to dump the computed DHKey */
+static void (*saved_dh_key_cb)(const uint8_t key[32]);
+
+static void dh_key_dump_cb(const uint8_t key[32])
+{
+    if (key) {
+        char hex_buf[65];
+        hex_format(hex_buf, key, 32);
+        printk("*** DHKEY_RESULT: %s ***\n", hex_buf);
+    } else {
+        printk("*** DHKEY_RESULT: NULL (ECDH failed) ***\n");
+    }
+    saved_dh_key_cb(key);
+}
+
 int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
                           void (*cb)(const uint8_t key[32]))
 {
-    /* MUST be static: bt_dh_key_gen is async - it saves the pointer
-     * and uses it later from a work queue handler. A stack-local
-     * buffer would be freed before the ECDH computation runs. */
+    /* MUST be static: bt_dh_key_gen copies from this pointer synchronously,
+     * but keeping static for safety. */
     static uint8_t fixed_pk[64];
     uint8_t x_be[32], y_be[32];
     char hex_buf[65];
@@ -1031,7 +1057,15 @@ int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
         printk("*** ECDH_FIX: Cannot compute Y, using original ***\n");
     }
 
-    return __real_bt_dh_key_gen(fixed_pk, cb);
+    /* v19: Dump the full key passed to real bt_dh_key_gen */
+    hex_format(hex_buf, fixed_pk, 32);
+    printk("*** ECDH_INPUT_X: %s ***\n", hex_buf);
+    hex_format(hex_buf, &fixed_pk[32], 32);
+    printk("*** ECDH_INPUT_Y: %s ***\n", hex_buf);
+
+    /* Intercept callback to dump DHKey */
+    saved_dh_key_cb = cb;
+    return __real_bt_dh_key_gen(fixed_pk, dh_key_dump_cb);
 }
 
 /* --- mbedtls_ecp_check_pubkey bypass (safety net for ECDH internals) --- */
