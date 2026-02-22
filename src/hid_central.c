@@ -872,6 +872,16 @@ SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 
 extern bool __real_bt_pub_key_is_valid(const uint8_t key[64]);
 
+/* Reverse-copy n bytes from src to dst (equivalent to sys_memcpy_swap) */
+static void memcpy_swap(void *dst, const void *src, size_t n)
+{
+    const uint8_t *s = src;
+    uint8_t *d = dst;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[n - 1 - i];
+    }
+}
+
 bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
 {
     psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
@@ -884,8 +894,8 @@ bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
     /* Test A: Standard (LE wire → BE for PSA via swap) */
     uint8_t tmp_swap[65];
     tmp_swap[0] = 0x04;
-    sys_memcpy_swap(&tmp_swap[1], key, 32);
-    sys_memcpy_swap(&tmp_swap[33], &key[32], 32);
+    memcpy_swap(&tmp_swap[1], key, 32);
+    memcpy_swap(&tmp_swap[33], &key[32], 32);
 
     int res_swap = (int)psa_import_key(&attr, tmp_swap, 65, &handle);
     if (res_swap == 0) psa_destroy_key(handle);
