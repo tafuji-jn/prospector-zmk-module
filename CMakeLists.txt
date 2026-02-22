@@ -19,10 +19,10 @@ endif()
 if(CONFIG_PROSPECTOR_DONGLE_MODE)
         target_sources(app PRIVATE src/hid_central.c)
         target_sources(app PRIVATE src/usb_hid_forwarder.c)
-        # v16: Bypass MbedTLS ECC point validation to test ECDH with
-        # keyboard's "invalid" key. If key is actually valid (PC pairs OK),
-        # ECDH will succeed. If truly invalid, SMP confirm will fail.
+        # v17: Wrap bt_pub_key_is_valid to test byte order hypothesis
+        # (swap vs raw) and bypass mbedtls_ecp_check_pubkey for ECDH.
         zephyr_link_libraries(
+                -Wl,--wrap=bt_pub_key_is_valid
                 -Wl,--wrap=mbedtls_ecp_check_pubkey
         )
 endif()

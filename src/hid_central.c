@@ -643,7 +643,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v16b: PSA_USE=%d PSA_NOUSE=%d P256M=%d ECP_BYPASS=1 ***\n",
+    printk("*** DONGLE v17: PSA_USE=%d PSA_NOUSE=%d P256M=%d KEY_ORDER_TEST ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -863,14 +863,59 @@ SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 #endif
 
 /* ------------------------------------------------------------------ */
-/* v16: Bypass MbedTLS ECC point validation                            */
-/* mbedtls_ecp_check_pubkey is called from both psa_import_key and     */
-/* psa_raw_key_agreement (ECDH). If the keyboard's key IS on P-256     */
-/* but validation has a bug, bypassing lets ECDH compute correct       */
-/* shared secret. If key is truly off-curve, SMP confirm will fail.    */
+/* v17: Wrap bt_pub_key_is_valid to test byte order hypothesis         */
+/* BLE spec says LE, but what if keyboard sends BE?                    */
+/* Also bypass mbedtls_ecp_check_pubkey for ECDH.                     */
 /* ------------------------------------------------------------------ */
 
 #include <mbedtls/ecp.h>
+
+extern bool __real_bt_pub_key_is_valid(const uint8_t key[64]);
+
+bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
+{
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_id_t handle;
+
+    psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_bits(&attr, 256);
+    psa_set_key_usage_flags(&attr, 0);
+
+    /* Test A: Standard (LE wire → BE for PSA via swap) */
+    uint8_t tmp_swap[65];
+    tmp_swap[0] = 0x04;
+    sys_memcpy_swap(&tmp_swap[1], key, 32);
+    sys_memcpy_swap(&tmp_swap[33], &key[32], 32);
+
+    int res_swap = (int)psa_import_key(&attr, tmp_swap, 65, &handle);
+    if (res_swap == 0) psa_destroy_key(handle);
+
+    /* Test B: No-swap (treat wire bytes as-is = BE) */
+    uint8_t tmp_raw[65];
+    tmp_raw[0] = 0x04;
+    memcpy(&tmp_raw[1], key, 64);  /* no byte swap */
+
+    int res_raw = (int)psa_import_key(&attr, tmp_raw, 65, &handle);
+    if (res_raw == 0) psa_destroy_key(handle);
+
+    psa_reset_key_attributes(&attr);
+
+    printk("*** KEY_ORDER: swap(LE->BE)=%d raw(as-is)=%d ***\n",
+           res_swap, res_raw);
+
+    /* If raw (no-swap) works, keyboard sends BE - use that */
+    if (res_raw == 0) {
+        printk("*** KEY_ORDER: Keyboard sends BE! ***\n");
+        return true;
+    }
+    /* If swap works, standard behavior is correct */
+    if (res_swap == 0) {
+        return true;
+    }
+
+    /* Both fail - call real for standard error handling */
+    return __real_bt_pub_key_is_valid(key);
+}
 
 extern int __real_mbedtls_ecp_check_pubkey(const mbedtls_ecp_group *grp,
                                             const mbedtls_ecp_point *pt);
@@ -880,10 +925,9 @@ int __wrap_mbedtls_ecp_check_pubkey(const mbedtls_ecp_group *grp,
 {
     int real_result = __real_mbedtls_ecp_check_pubkey(grp, pt);
     if (real_result != 0) {
-        printk("*** ECP_CHECK: BYPASSED (real=%d, returning 0) ***\n",
-               real_result);
+        printk("*** ECP_CHECK: BYPASSED (real=%d) ***\n", real_result);
     }
-    return 0; /* Always pass */
+    return 0;
 }
 
 
