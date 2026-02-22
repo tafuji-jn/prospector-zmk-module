@@ -532,10 +532,22 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
             return; /* Not our bonded keyboard */
         }
     } else {
-        /* Not yet bonded – look for HID service or matching name.
-         * Name comes from scan response cache in status_scanner.c. */
-        if (!is_hid_service_in_ad(buf) && !name_matches_target(name)) {
-            return;
+#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
+        const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
+        if (target[0] != '\0') {
+            /* Target name is set – REQUIRE name match.
+             * Don't connect based on HID service UUID alone,
+             * otherwise we'd grab random BLE HID mice/keyboards. */
+            if (!name_matches_target(name)) {
+                return;
+            }
+        } else
+#endif
+        {
+            /* No target name – accept any device with HID service */
+            if (!is_hid_service_in_ad(buf)) {
+                return;
+            }
         }
     }
 

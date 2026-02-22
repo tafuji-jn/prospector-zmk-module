@@ -414,9 +414,10 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
     
     if (!scanning) {
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-        /* Even when scanner is not started, forward connectable ads to HID Central */
+        /* Even when scanner is not started, forward ads to HID Central */
         if (type == BT_GAP_ADV_TYPE_ADV_IND ||
-            type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
+            type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND ||
+            (type & BT_HCI_LE_ADV_EVT_TYPE_SCAN_RSP)) {
             const char *cached_name = get_device_name(addr);
             hid_central_on_scan_result(addr, rssi, type, buf, cached_name);
         }
@@ -539,11 +540,14 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
     }
 
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-    /* Forward connectable advertisements to HID Central for dongle mode.
-     * Accept ADV_IND (undirected connectable) and ADV_DIRECT_IND (directed).
-     * Name is looked up from the scan response cache. */
+    /* Forward to HID Central for dongle mode.
+     * ADV_IND/ADV_DIRECT_IND: connectable advertisement
+     * SCAN_RSP: scan response that carries the device name.
+     *   SCAN_RSP is a reply to our SCAN_REQ, which we only send
+     *   for connectable ADV_IND, so the device is connectable. */
     if (type == BT_GAP_ADV_TYPE_ADV_IND ||
-        type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
+        type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND ||
+        (type & BT_HCI_LE_ADV_EVT_TYPE_SCAN_RSP)) {
         const char *cached_name = get_device_name(addr);
         hid_central_on_scan_result(addr, rssi, type, buf, cached_name);
     }
