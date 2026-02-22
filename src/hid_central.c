@@ -849,6 +849,12 @@ static int dongle_bt_enable(void)
     printk("*** DONGLE: Settings loaded (bonds) ***\n");
 #endif
 
+    /* Clear all bonds to force fresh pairing.
+     * Previous failed pairing attempts left stale bonds on keyboard side.
+     * Without this, keyboard tries LTK re-encryption → PIN_OR_KEY_MISSING. */
+    err = bt_unpair(BT_ID_DEFAULT, NULL);
+    printk("*** DONGLE: Bonds cleared: %d ***\n", err);
+
     return 0;
 }
 
