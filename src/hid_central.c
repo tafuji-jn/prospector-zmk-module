@@ -424,11 +424,9 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
         printk("*** DONGLE: Security requested, waiting for pairing ***\n");
     }
 
-    /* Restart scanning so Observer can keep receiving advertisements */
-    int scan_err = status_scanner_restart_scanning();
-    if (scan_err) {
-        LOG_WRN("Failed to restart scanning after connect: %d", scan_err);
-    }
+    /* Do NOT restart scanning here – passive scan during LESC pairing
+     * can interfere with the connection (RF noise / timing).
+     * Scanning will be restarted in security_changed_cb after pairing. */
 }
 
 static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
@@ -463,6 +461,14 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
 {
     if (conn != kbd_conn) {
         return;
+    }
+
+    /* Restart scanning now that pairing is done (success or fail).
+     * We delayed this from connected_cb to avoid RF interference
+     * during LESC key exchange. */
+    int scan_err = status_scanner_restart_scanning();
+    if (scan_err) {
+        LOG_WRN("Failed to restart scanning after security: %d", scan_err);
     }
 
     if (err) {
