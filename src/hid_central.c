@@ -643,7 +643,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v18: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX ***\n",
+    printk("*** DONGLE v18b: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -1007,7 +1007,10 @@ extern int __real_bt_dh_key_gen(const uint8_t remote_pk[64],
 int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
                           void (*cb)(const uint8_t key[32]))
 {
-    uint8_t fixed_pk[64];
+    /* MUST be static: bt_dh_key_gen is async - it saves the pointer
+     * and uses it later from a work queue handler. A stack-local
+     * buffer would be freed before the ECDH computation runs. */
+    static uint8_t fixed_pk[64];
     uint8_t x_be[32], y_be[32];
     char hex_buf[65];
 
