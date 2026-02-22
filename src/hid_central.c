@@ -14,8 +14,6 @@
 #include <zephyr/init.h>
 #include <string.h>
 
-#include <psa/crypto.h>
-
 #include <zmk/hid_central.h>
 #include <zmk/usb_hid_forwarder.h>
 #include <zmk/status_scanner.h>
@@ -608,44 +606,11 @@ static void run_psa_diagnostic(void)
     }
     psa_diag_done = true;
 
-    printk("*** DONGLE PSA DIAG: MBEDTLS=%d PSA_CRYPTO_C=%d P256M=%d ECC_PUB=%d ***\n",
-           IS_ENABLED(CONFIG_MBEDTLS),
-           IS_ENABLED(CONFIG_MBEDTLS_PSA_CRYPTO_C),
-           IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED),
-           IS_ENABLED(CONFIG_PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY));
-
-    psa_status_t ret = psa_crypto_init();
-    printk("*** DONGLE PSA DIAG: psa_crypto_init() = %d ***\n", ret);
-
-    if (ret == PSA_SUCCESS) {
-        /* Test ECC P-256 public key import with the generator point */
-        psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
-        psa_set_key_type(&attr,
-                         PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
-        psa_set_key_bits(&attr, 256);
-        psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
-        psa_set_key_algorithm(&attr, PSA_ALG_ECDH);
-
-        static const uint8_t test_pub_key[] = {
-            0x04,
-            0x6B, 0x17, 0xD1, 0xF2, 0xE1, 0x2C, 0x42, 0x47,
-            0xF8, 0xBC, 0xE6, 0xE5, 0x63, 0xA4, 0x40, 0xF2,
-            0x77, 0x03, 0x7D, 0x81, 0x2D, 0xEB, 0x33, 0xA0,
-            0xF4, 0xA1, 0x39, 0x45, 0xD8, 0x98, 0xC2, 0x96,
-            0x4F, 0xE3, 0x42, 0xE2, 0xFE, 0x1A, 0x7F, 0x9B,
-            0x8E, 0xE7, 0xEB, 0x4A, 0x7C, 0x0F, 0x9E, 0x16,
-            0x2B, 0xCE, 0x33, 0x57, 0x6B, 0x31, 0x5E, 0xCE,
-            0xCB, 0xB6, 0x40, 0x68, 0x37, 0xBF, 0x51, 0xF5,
-        };
-        psa_key_id_t handle;
-        ret = psa_import_key(&attr, test_pub_key, sizeof(test_pub_key),
-                             &handle);
-        printk("*** DONGLE PSA DIAG: ECC pub key import = %d ***\n", ret);
-        if (ret == PSA_SUCCESS) {
-            psa_destroy_key(handle);
-        }
-        psa_reset_key_attributes(&attr);
-    }
+    printk("*** PSA_DIAG: start ***\n");
+    printk("*** PSA_DIAG: ECC_PUB=%d BT_ECC=%d ***\n",
+           IS_ENABLED(CONFIG_PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY),
+           IS_ENABLED(CONFIG_BT_ECC));
+    printk("*** PSA_DIAG: done ***\n");
 }
 
 static void connect_work_handler(struct k_work *work)
@@ -792,10 +757,6 @@ static void schedule_reconnect(void)
 
 static int hid_central_init(void)
 {
-    /* PSA crypto init is called here (idempotent, safe to call early).
-     * Diagnostic output is in connect_work_handler when USB serial is ready. */
-    psa_crypto_init();
-
     k_work_init_delayable(&reconnect_work, reconnect_work_handler);
     k_work_init(&connect_work, connect_work_handler);
 
