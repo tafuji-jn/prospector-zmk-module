@@ -12,6 +12,7 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/init.h>
+#include <zephyr/settings/settings.h>
 #include <string.h>
 
 #include <zmk/hid_central.h>
@@ -760,3 +761,29 @@ static int hid_central_init(void)
 }
 
 SYS_INIT(hid_central_init, APPLICATION, 99);
+
+/* ------------------------------------------------------------------ */
+/* BT stack initialization (when ZMK_BLE is disabled)                 */
+/* ------------------------------------------------------------------ */
+
+#if !IS_ENABLED(CONFIG_ZMK_BLE)
+static int dongle_bt_enable(void)
+{
+    int err = bt_enable(NULL);
+    if (err) {
+        printk("*** DONGLE: bt_enable failed: %d ***\n", err);
+        return err;
+    }
+    printk("*** DONGLE: BT stack initialized (ZMK_BLE disabled) ***\n");
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+    settings_load();
+    printk("*** DONGLE: Settings loaded (bonds) ***\n");
+#endif
+
+    return 0;
+}
+
+/* Run before scanner init (priority 99) */
+SYS_INIT(dongle_bt_enable, APPLICATION, 50);
+#endif
