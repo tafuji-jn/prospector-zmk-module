@@ -414,11 +414,15 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     printk("*** DONGLE: Connected to %s ***\n", addr_str);
     LOG_INF("Connected to %s", addr_str);
 
-    /* v19: Dump our own BLE address and public key for DHKey verification */
+    /* v19b: Dump our own BLE address and public key for DHKey verification.
+     * Use bt_id_get instead of bt_le_oob_get_local (which can interfere
+     * with SMP state during connected_cb). */
     {
-        struct bt_le_oob oob;
-        if (bt_le_oob_get_local(BT_ID_DEFAULT, &oob) == 0) {
-            bt_addr_le_to_str(&oob.addr, addr_str, sizeof(addr_str));
+        bt_addr_le_t addrs[1];
+        size_t count = 1;
+        bt_id_get(addrs, &count);
+        if (count > 0) {
+            bt_addr_le_to_str(&addrs[0], addr_str, sizeof(addr_str));
             printk("*** DONGLE: Our addr: %s ***\n", addr_str);
         }
         const uint8_t *our_pk = bt_pub_key_get();
@@ -655,7 +659,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v19: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX+DHKEY_DUMP ***\n",
+    printk("*** DONGLE v19b: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX+DHKEY_DUMP ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
