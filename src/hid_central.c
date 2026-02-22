@@ -401,16 +401,18 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
 
     state = STATE_CONNECTING;
 
-    /* Request security (triggers pairing if needed) */
+    /* Request security – GATT discovery will start in security_changed_cb
+     * because HID attributes require encryption to be visible. */
+    discover_after_security = true;
     int sec_err = bt_conn_set_security(conn, BT_SECURITY_L2);
     if (sec_err) {
-        LOG_WRN("Security request failed: %d (continuing anyway)", sec_err);
+        printk("*** DONGLE: Security request failed: %d, trying discovery anyway ***\n", sec_err);
+        LOG_WRN("Security request failed: %d", sec_err);
+        discover_after_security = false;
+        start_hid_discovery(conn);
+    } else {
+        printk("*** DONGLE: Security requested, waiting for pairing ***\n");
     }
-
-    /* Start GATT discovery after a short delay to let security settle */
-    /* We proceed with discovery directly; encryption may complete
-     * during discovery or the remote will send Security Request. */
-    start_hid_discovery(conn);
 
     /* Restart scanning so Observer can keep receiving advertisements */
     int scan_err = status_scanner_restart_scanning();
@@ -446,6 +448,9 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     schedule_reconnect();
 }
 
+/* Flag: discovery is waiting for security to be established */
+static bool discover_after_security;
+
 static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
                                  enum bt_security_err err)
 {
@@ -454,12 +459,26 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
     }
 
     if (err) {
+        printk("*** DONGLE: Security failed: level %d err %d ***\n", level, err);
         LOG_WRN("Security change failed: level %d err %d", level, err);
+        /* Try discovery anyway – some devices allow unencrypted HID access */
+        if (discover_after_security) {
+            discover_after_security = false;
+            start_hid_discovery(conn);
+        }
     } else {
+        printk("*** DONGLE: Security level %d established ***\n", level);
         LOG_INF("Security level %d established", level);
         /* Store bonded address for reconnection */
         bt_addr_le_copy(&bonded_addr, bt_conn_get_dst(conn));
         has_bonded_addr = true;
+
+        /* If we were waiting to discover, do it now */
+        if (discover_after_security) {
+            discover_after_security = false;
+            printk("*** DONGLE: Starting HID discovery after security ***\n");
+            start_hid_discovery(conn);
+        }
     }
 }
 
@@ -596,7 +615,19 @@ static void connect_work_handler(struct k_work *work)
     if (existing) {
         printk("*** DONGLE: Existing connection found to %s, reusing ***\n", addr_str);
         kbd_conn = existing; /* already ref'd by lookup */
-        start_hid_discovery(kbd_conn);
+
+        /* Request encryption – HID attributes are hidden until encrypted.
+         * GATT discovery will start in security_changed_cb. */
+        discover_after_security = true;
+        int sec_err = bt_conn_set_security(kbd_conn, BT_SECURITY_L2);
+        if (sec_err) {
+            printk("*** DONGLE: Security request failed: %d, trying discovery anyway ***\n", sec_err);
+            discover_after_security = false;
+            start_hid_discovery(kbd_conn);
+        } else {
+            printk("*** DONGLE: Security requested, waiting for pairing ***\n");
+        }
+
         /* Restart scanning for Observer */
         status_scanner_restart_scanning();
         return;
