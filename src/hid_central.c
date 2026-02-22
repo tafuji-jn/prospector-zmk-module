@@ -643,7 +643,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v17: PSA_USE=%d PSA_NOUSE=%d P256M=%d KEY_ORDER_TEST ***\n",
+    printk("*** DONGLE v17b: PSA_USE=%d PSA_NOUSE=%d P256M=%d KEY_DUMP ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -863,8 +863,9 @@ SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 #endif
 
 /* ------------------------------------------------------------------ */
-/* v17: Wrap bt_pub_key_is_valid to test byte order hypothesis         */
-/* BLE spec says LE, but what if keyboard sends BE?                    */
+/* v17b: Dump raw key bytes + always return true to let ECDH proceed   */
+/* v17 failed: psa_import_key x2 on BT RX thread → -141 (OOM).        */
+/* Instead, just hex-dump the key for offline analysis.                 */
 /* Also bypass mbedtls_ecp_check_pubkey for ECDH.                     */
 /* ------------------------------------------------------------------ */
 
@@ -872,59 +873,25 @@ SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 
 extern bool __real_bt_pub_key_is_valid(const uint8_t key[64]);
 
-/* Reverse-copy n bytes from src to dst (equivalent to sys_memcpy_swap) */
-static void memcpy_swap(void *dst, const void *src, size_t n)
-{
-    const uint8_t *s = src;
-    uint8_t *d = dst;
-    for (size_t i = 0; i < n; i++) {
-        d[i] = s[n - 1 - i];
-    }
-}
-
 bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
 {
-    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
-    psa_key_id_t handle;
-
-    psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
-    psa_set_key_bits(&attr, 256);
-    psa_set_key_usage_flags(&attr, 0);
-
-    /* Test A: Standard (LE wire → BE for PSA via swap) */
-    uint8_t tmp_swap[65];
-    tmp_swap[0] = 0x04;
-    memcpy_swap(&tmp_swap[1], key, 32);
-    memcpy_swap(&tmp_swap[33], &key[32], 32);
-
-    int res_swap = (int)psa_import_key(&attr, tmp_swap, 65, &handle);
-    if (res_swap == 0) psa_destroy_key(handle);
-
-    /* Test B: No-swap (treat wire bytes as-is = BE) */
-    uint8_t tmp_raw[65];
-    tmp_raw[0] = 0x04;
-    memcpy(&tmp_raw[1], key, 64);  /* no byte swap */
-
-    int res_raw = (int)psa_import_key(&attr, tmp_raw, 65, &handle);
-    if (res_raw == 0) psa_destroy_key(handle);
-
-    psa_reset_key_attributes(&attr);
-
-    printk("*** KEY_ORDER: swap(LE->BE)=%d raw(as-is)=%d ***\n",
-           res_swap, res_raw);
-
-    /* If raw (no-swap) works, keyboard sends BE - use that */
-    if (res_raw == 0) {
-        printk("*** KEY_ORDER: Keyboard sends BE! ***\n");
-        return true;
+    /* Dump X coordinate (bytes 0-31) as received on wire (LE per BLE spec) */
+    printk("*** KEY_X_WIRE: ");
+    for (int i = 0; i < 32; i++) {
+        printk("%02x", key[i]);
     }
-    /* If swap works, standard behavior is correct */
-    if (res_swap == 0) {
-        return true;
-    }
+    printk(" ***\n");
 
-    /* Both fail - call real for standard error handling */
-    return __real_bt_pub_key_is_valid(key);
+    /* Dump Y coordinate (bytes 32-63) as received on wire */
+    printk("*** KEY_Y_WIRE: ");
+    for (int i = 32; i < 64; i++) {
+        printk("%02x", key[i]);
+    }
+    printk(" ***\n");
+
+    /* Always return true - let ECDH proceed (with ecp_check bypass) */
+    printk("*** KEY_VALID: FORCED TRUE ***\n");
+    return true;
 }
 
 extern int __real_mbedtls_ecp_check_pubkey(const mbedtls_ecp_group *grp,
