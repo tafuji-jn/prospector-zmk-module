@@ -19,10 +19,6 @@ endif()
 if(CONFIG_PROSPECTOR_DONGLE_MODE)
         target_sources(app PRIVATE src/hid_central.c)
         target_sources(app PRIVATE src/usb_hid_forwarder.c)
-        # v15: Wrap bt_pub_key_is_valid to dump received key bytes
-        zephyr_link_libraries(
-                -Wl,--wrap=bt_pub_key_is_valid
-        )
 endif()
 
 # DISABLED FOR DEBUG: Custom display/LVGL drivers may be causing boot issues
