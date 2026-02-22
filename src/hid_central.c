@@ -643,7 +643,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v17b: PSA_USE=%d PSA_NOUSE=%d P256M=%d KEY_DUMP ***\n",
+    printk("*** DONGLE v17c: PSA_USE=%d PSA_NOUSE=%d P256M=%d KEY_DUMP ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -863,9 +863,9 @@ SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 #endif
 
 /* ------------------------------------------------------------------ */
-/* v17b: Dump raw key bytes + always return true to let ECDH proceed   */
-/* v17 failed: psa_import_key x2 on BT RX thread → -141 (OOM).        */
-/* Instead, just hex-dump the key for offline analysis.                 */
+/* v17c: Dump raw key bytes in single printk calls (fix log overflow)  */
+/* v17b: per-byte printk caused "messages dropped" in log buffer.      */
+/* Format hex into stack buffer, print once per coordinate.            */
 /* Also bypass mbedtls_ecp_check_pubkey for ECDH.                     */
 /* ------------------------------------------------------------------ */
 
@@ -873,23 +873,26 @@ SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 
 extern bool __real_bt_pub_key_is_valid(const uint8_t key[64]);
 
+static void hex_format(char *out, const uint8_t *data, size_t len)
+{
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < len; i++) {
+        out[i * 2]     = hex[data[i] >> 4];
+        out[i * 2 + 1] = hex[data[i] & 0x0f];
+    }
+    out[len * 2] = '\0';
+}
+
 bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
 {
-    /* Dump X coordinate (bytes 0-31) as received on wire (LE per BLE spec) */
-    printk("*** KEY_X_WIRE: ");
-    for (int i = 0; i < 32; i++) {
-        printk("%02x", key[i]);
-    }
-    printk(" ***\n");
+    char hex_buf[65]; /* 32 bytes = 64 hex chars + null */
 
-    /* Dump Y coordinate (bytes 32-63) as received on wire */
-    printk("*** KEY_Y_WIRE: ");
-    for (int i = 32; i < 64; i++) {
-        printk("%02x", key[i]);
-    }
-    printk(" ***\n");
+    hex_format(hex_buf, &key[0], 32);
+    printk("*** KEY_X: %s ***\n", hex_buf);
 
-    /* Always return true - let ECDH proceed (with ecp_check bypass) */
+    hex_format(hex_buf, &key[32], 32);
+    printk("*** KEY_Y: %s ***\n", hex_buf);
+
     printk("*** KEY_VALID: FORCED TRUE ***\n");
     return true;
 }
