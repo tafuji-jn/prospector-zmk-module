@@ -21,8 +21,6 @@
 #include <zephyr/sys/reboot.h>
 #if IS_ENABLED(CONFIG_RETENTION_BOOT_MODE)
 #include <zephyr/retention/bootmode.h>
-#else
-#include <hal/nrf_power.h>
 #endif
 #include <zephyr/drivers/led.h>  /* For PWM backlight control */
 #include <string.h>
@@ -2289,7 +2287,7 @@ static void ss_bootloader_btn_event_cb(lv_event_t *e) {
         }
 #else
         /* nRF52 fallback: write DFU magic to GPREGRET for UF2 bootloader */
-        nrf_power_gpregret_set(NRF_POWER, 0x57);
+        NRF_POWER->GPREGRET = 0x57;
 #endif
         LOG_INF("Bootmode set to BOOTLOADER - rebooting...");
         sys_reboot(SYS_REBOOT_WARM);
