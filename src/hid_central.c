@@ -642,8 +642,8 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v14: PSA_WQ=%d PSA_RX=%d P256M=%d ***\n",
-           psa_test_result, psa_bt_rx_result,
+    printk("*** DONGLE v15: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
+           psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
     /* One-time PSA import test with known-valid key */
@@ -789,7 +789,10 @@ SYS_INIT(hid_central_init, APPLICATION, 99);
 /* ------------------------------------------------------------------ */
 
 /* Test psa_import_key with a known-valid P-256 public key (generator point G).
- * Stores result in psa_test_result global for printing from known-working printk. */
+ * Tests BOTH with ECDH usage flags (our original test) and with usage=0
+ * (same attributes as bt_pub_key_is_valid) to check if attributes matter. */
+static int psa_test_nousage = -999;  /* test with usage_flags=0 */
+
 static void test_psa_import(void)
 {
     /* P-256 generator point G in uncompressed form (0x04 || X || Y) */
@@ -808,17 +811,27 @@ static void test_psa_import(void)
     psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
     psa_key_id_t handle;
 
+    /* Test A: with ECDH usage (our original working test) */
     psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
     psa_set_key_bits(&attr, 256);
     psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
     psa_set_key_algorithm(&attr, PSA_ALG_ECDH);
 
     psa_test_result = (int)psa_import_key(&attr, test_key, sizeof(test_key), &handle);
-
     if (psa_test_result == 0) {
         psa_destroy_key(handle);
     }
+    psa_reset_key_attributes(&attr);
 
+    /* Test B: with usage=0, no algorithm (same as bt_pub_key_is_valid) */
+    psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_bits(&attr, 256);
+    psa_set_key_usage_flags(&attr, 0);
+
+    psa_test_nousage = (int)psa_import_key(&attr, test_key, sizeof(test_key), &handle);
+    if (psa_test_nousage == 0) {
+        psa_destroy_key(handle);
+    }
     psa_reset_key_attributes(&attr);
 }
 
@@ -843,4 +856,58 @@ static int dongle_bt_enable(void)
 /* Run before scanner init (priority 99) */
 SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 #endif
+
+/* ------------------------------------------------------------------ */
+/* v15: Wrap bt_pub_key_is_valid to dump key + test attributes         */
+/* ------------------------------------------------------------------ */
+
+#include <zephyr/sys/byteorder.h>
+
+extern bool __real_bt_pub_key_is_valid(const uint8_t key[64]);
+
+bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
+{
+    /* Dump the full 64-byte key received from keyboard (LE format) */
+    printk("*** KEY_DUMP_X: ");
+    for (int i = 0; i < 32; i++) {
+        printk("%02x", key[i]);
+    }
+    printk(" ***\n");
+    printk("*** KEY_DUMP_Y: ");
+    for (int i = 32; i < 64; i++) {
+        printk("%02x", key[i]);
+    }
+    printk(" ***\n");
+
+    /* Test: import this ACTUAL key with ECDH usage flags
+     * (bt_pub_key_is_valid uses usage=0; does that matter?) */
+    uint8_t tmp[65];
+    tmp[0] = 0x04;
+    sys_memcpy_swap(&tmp[1], key, 32);       /* X: LE → BE */
+    sys_memcpy_swap(&tmp[33], &key[32], 32); /* Y: LE → BE */
+
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_id_t handle;
+
+    /* Test with ECDH usage (like our working test_psa_import) */
+    psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_bits(&attr, 256);
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
+    psa_set_key_algorithm(&attr, PSA_ALG_ECDH);
+
+    int with_usage = (int)psa_import_key(&attr, tmp, sizeof(tmp), &handle);
+    if (with_usage == 0) {
+        psa_destroy_key(handle);
+    }
+    psa_reset_key_attributes(&attr);
+
+    printk("*** KEY_TEST: real_validate=%d, with_usage=%d ***\n",
+           -999, with_usage);
+
+    /* Call real validation */
+    bool result = __real_bt_pub_key_is_valid(key);
+    printk("*** KEY_VALID: %s ***\n", result ? "PASS" : "FAIL");
+
+    return result;
+}
 
