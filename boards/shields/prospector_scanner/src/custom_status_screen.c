@@ -19,7 +19,11 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/reboot.h>
-#include <zephyr/retention/bootmode.h>  /* For bootmode_set() - Zephyr 4.x bootloader entry */
+#if IS_ENABLED(CONFIG_RETENTION_BOOT_MODE)
+#include <zephyr/retention/bootmode.h>
+#else
+#include <hal/nrf_power.h>
+#endif
 #include <zephyr/drivers/led.h>  /* For PWM backlight control */
 #include <string.h>
 #include <lvgl.h>
@@ -2277,12 +2281,16 @@ static void ss_bootloader_btn_event_cb(lv_event_t *e) {
 
     if (code == LV_EVENT_CLICKED || code == LV_EVENT_SHORT_CLICKED) {
         LOG_INF("Bootloader button ACTIVATED - entering bootloader mode");
-        /* Use Zephyr 4.x RETENTION_BOOT_MODE API for bootloader entry */
+#if IS_ENABLED(CONFIG_RETENTION_BOOT_MODE)
         int ret = bootmode_set(BOOT_MODE_TYPE_BOOTLOADER);
         if (ret < 0) {
             LOG_ERR("Failed to set bootloader mode: %d", ret);
             return;
         }
+#else
+        /* nRF52 fallback: write DFU magic to GPREGRET for UF2 bootloader */
+        nrf_power_gpregret_set(NRF_POWER, 0x57);
+#endif
         LOG_INF("Bootmode set to BOOTLOADER - rebooting...");
         sys_reboot(SYS_REBOOT_WARM);
     }
