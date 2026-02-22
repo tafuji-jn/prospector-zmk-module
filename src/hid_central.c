@@ -101,6 +101,7 @@ static bool psa_diag_done;
 static void start_hid_discovery(struct bt_conn *conn);
 static void subscribe_next_input_report(int idx);
 static void schedule_reconnect(void);
+static void test_psa_import(void);
 
 /* ------------------------------------------------------------------ */
 /* USB HID report forwarding                                          */
@@ -773,8 +774,6 @@ SYS_INIT(hid_central_init, APPLICATION, 99);
 /* BT stack initialization (when ZMK_BLE is disabled)                 */
 /* ------------------------------------------------------------------ */
 
-#if !IS_ENABLED(CONFIG_ZMK_BLE)
-
 /* Test psa_import_key with a known-valid P-256 public key (generator point G) */
 static void test_psa_import(void)
 {
@@ -814,11 +813,9 @@ static void test_psa_import(void)
     psa_reset_key_attributes(&attr);
 }
 
+#if !IS_ENABLED(CONFIG_ZMK_BLE)
 static int dongle_bt_enable(void)
 {
-    /* Test PSA crypto before BT init */
-    test_psa_import();
-
     int err = bt_enable(NULL);
     if (err) {
         printk("*** DONGLE: bt_enable failed: %d ***\n", err);
