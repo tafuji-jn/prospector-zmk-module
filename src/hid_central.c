@@ -661,7 +661,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE: BT_MAX_CONN=%d ***\n", CONFIG_BT_MAX_CONN);
+    printk("*** DONGLE v3: BT_MAX_CONN=%d ***\n", CONFIG_BT_MAX_CONN);
 
     /* Check if a connection to this address already exists.
      * ZMK/Zephyr may auto-accept incoming BLE connections from
