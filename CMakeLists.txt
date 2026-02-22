@@ -19,8 +19,12 @@ endif()
 if(CONFIG_PROSPECTOR_DONGLE_MODE)
         target_sources(app PRIVATE src/hid_central.c)
         target_sources(app PRIVATE src/usb_hid_forwarder.c)
-        # Wrap bt_pub_key_is_valid to dump key bytes before validation
-        zephyr_link_libraries(-Wl,--wrap=bt_pub_key_is_valid)
+        # Force Legacy Pairing: wrap ECC functions to disable SC
+        # Keyboard generates invalid P-256 keys; Legacy pairing bypasses ECDH
+        zephyr_link_libraries(
+                -Wl,--wrap=bt_pub_key_get
+                -Wl,--wrap=bt_pub_key_gen
+        )
 endif()
 
 # DISABLED FOR DEBUG: Custom display/LVGL drivers may be causing boot issues

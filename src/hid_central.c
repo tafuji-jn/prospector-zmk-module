@@ -845,28 +845,29 @@ SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 #endif
 
 /* ------------------------------------------------------------------ */
-/* Diagnostic: wrap bt_pub_key_is_valid to dump key bytes             */
+/* ------------------------------------------------------------------ */
+/* Force Legacy Pairing by disabling SC at runtime                    */
+/* The keyboard generates invalid P-256 keys (both byte orders fail   */
+/* validation AND ECDH). Legacy pairing bypasses ECDH entirely.       */
 /* Uses GCC --wrap linker option (see CMakeLists.txt)                 */
 /* ------------------------------------------------------------------ */
 
-extern bool __real_bt_pub_key_is_valid(const uint8_t key[64]);
+#include <zephyr/bluetooth/crypto.h>
 
-bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
+struct bt_pub_key_cb;
+
+extern const uint8_t *__real_bt_pub_key_get(void);
+extern int __real_bt_pub_key_gen(struct bt_pub_key_cb *new_cb);
+
+const uint8_t *__wrap_bt_pub_key_get(void)
 {
-    /* Compact hex dump of the full 64-byte key (LE format from SMP PDU) */
-    printk("*** KEY[0-31]: ");
-    for (int i = 0; i < 32; i++) {
-        printk("%02x", key[i]);
-    }
-    printk("\n*** KEY[32-63]: ");
-    for (int i = 32; i < 64; i++) {
-        printk("%02x", key[i]);
-    }
-    printk(" ***\n");
+    /* Return NULL = "no ECC key available" → SMP won't set SC bit */
+    return NULL;
+}
 
-    /* SKIP VALIDATION - keyboard may be generating invalid keys that
-     * PCs/phones accept (they don't validate remote public keys).
-     * This lets us test if the rest of LESC + GATT discovery works. */
-    printk("*** KEY_VALID: SKIPPED (returning true) ***\n");
-    return true;
+int __wrap_bt_pub_key_gen(struct bt_pub_key_cb *new_cb)
+{
+    /* Block key generation → SC stays unavailable */
+    printk("*** DONGLE: bt_pub_key_gen blocked (forcing Legacy Pairing) ***\n");
+    return -ENOTSUP;
 }
