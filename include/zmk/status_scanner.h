@@ -101,10 +101,22 @@ int zmk_status_scanner_get_active_count(void);
 
 /**
  * @brief Get the index of the primary keyboard (most recently seen)
- * 
+ *
  * @return Index of primary keyboard, -1 if no keyboards found
  */
 int zmk_status_scanner_get_primary_keyboard(void);
+
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+/**
+ * @brief Restart BLE scanning in passive mode
+ *
+ * Used by the HID Central to resume Observer scanning after a BLE
+ * connection is established, so advertisement reception continues.
+ *
+ * @return 0 on success, negative error code on failure
+ */
+int status_scanner_restart_scanning(void);
+#endif
 
 #ifdef __cplusplus
 }

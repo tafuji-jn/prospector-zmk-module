@@ -142,6 +142,42 @@ config PROSPECTOR_MODE_SCANNER
       Enable scanner mode to receive status advertisements from ZMK keyboards.
       In this mode, Prospector acts as a standalone status display device.
 
+config PROSPECTOR_DONGLE_MODE
+    bool "Enable BLE Central dongle mode (USB HID forwarding)"
+    default n
+    depends on PROSPECTOR_MODE_SCANNER
+    select BT_CENTRAL
+    select BT_GATT_CLIENT
+    select BT_SMP
+    help
+      Enable dongle mode where Prospector acts as a BLE Central (HID host)
+      and forwards keyboard HID reports to the PC via USB HID.
+      The scanner Observer mode continues to work alongside for LCD status display.
+
+config PROSPECTOR_DONGLE_TARGET_NAME
+    string "Target keyboard BLE name (empty = first HID device)"
+    default ""
+    depends on PROSPECTOR_DONGLE_MODE
+    help
+      BLE device name of the target keyboard to connect to.
+      Leave empty to connect to the first HID keyboard found.
+
+config PROSPECTOR_DONGLE_AUTO_RECONNECT
+    bool "Auto reconnect to bonded keyboard"
+    default y
+    depends on PROSPECTOR_DONGLE_MODE
+    help
+      Automatically reconnect to a previously bonded keyboard
+      when connection is lost.
+
+config PROSPECTOR_DONGLE_RECONNECT_INTERVAL_MS
+    int "Reconnection interval (ms)"
+    range 1000 30000
+    default 5000
+    depends on PROSPECTOR_DONGLE_AUTO_RECONNECT
+    help
+      Interval between reconnection attempts in milliseconds.
+
 config PROSPECTOR_TOUCH_ENABLED
     bool "Enable touch panel support"
     default y

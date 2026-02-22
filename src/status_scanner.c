@@ -526,6 +526,16 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
         // This will be removed once message processing is implemented in main task
         process_advertisement_with_name(prospector_data, rssi, addr);
     }
+
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+    /* Forward connectable advertisements to HID Central for dongle mode */
+    if (type == BT_GAP_ADV_TYPE_ADV_IND) {
+        extern void hid_central_on_scan_result(const bt_addr_le_t *addr,
+                                                int8_t rssi, uint8_t type,
+                                                struct net_buf_simple *buf);
+        hid_central_on_scan_result(addr, rssi, type, buf);
+    }
+#endif
 }
 
 static void timeout_work_handler(struct k_work *work) {
@@ -707,6 +717,24 @@ int zmk_status_scanner_get_primary_keyboard(void) {
     
     return primary;
 }
+
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+int status_scanner_restart_scanning(void) {
+    struct bt_le_scan_param scan_param = {
+        .type = BT_LE_SCAN_TYPE_PASSIVE,
+        .options = BT_LE_SCAN_OPT_NONE,
+        .interval = BT_GAP_SCAN_FAST_INTERVAL,
+        .window = BT_GAP_SCAN_FAST_WINDOW,
+    };
+    int err = bt_le_scan_start(&scan_param, scan_callback);
+    if (err) {
+        LOG_WRN("Restart scanning failed: %d", err);
+    } else {
+        LOG_INF("Scanning restarted (passive) for Observer coexistence");
+    }
+    return err;
+}
+#endif
 
 // Initialize on system startup - use later priority to ensure BT is ready
 SYS_INIT(zmk_status_scanner_init, APPLICATION, 99);

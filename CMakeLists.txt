@@ -15,6 +15,12 @@ if(CONFIG_PROSPECTOR_MODE_SCANNER)
         target_sources(app PRIVATE src/status_scanner.c)
 endif()
 
+# BLE Central / USB HID dongle mode
+if(CONFIG_PROSPECTOR_DONGLE_MODE)
+        target_sources(app PRIVATE src/hid_central.c)
+        target_sources(app PRIVATE src/usb_hid_forwarder.c)
+endif()
+
 # DISABLED FOR DEBUG: Custom display/LVGL drivers may be causing boot issues
 # Display_test works without these - use Zephyr's built-in drivers instead
 # if(CONFIG_SHIELD_PROSPECTOR_ADAPTER OR CONFIG_SHIELD_PROSPECTOR_SCANNER)
