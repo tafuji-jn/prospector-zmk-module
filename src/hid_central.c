@@ -629,32 +629,19 @@ static void connect_work_handler(struct k_work *work)
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED),
            CONFIG_BT_MAX_CONN);
 
-    /* Check if a connection to this address already exists.
-     * ZMK/Zephyr may auto-accept incoming BLE connections from
-     * the keyboard, so we can reuse that connection directly. */
+    /* Check if a stale connection object exists for this address.
+     * If found, disconnect it first – reusing an existing connection
+     * with unknown SMP state can cause LESC pairing failures. */
     struct bt_conn *existing = bt_conn_lookup_addr_le(BT_ID_DEFAULT, &pending_addr);
     if (existing) {
-        printk("*** DONGLE: Existing connection found to %s, reusing ***\n", addr_str);
-        kbd_conn = existing; /* already ref'd by lookup */
-
-        /* Request encryption – HID attributes are hidden until encrypted.
-         * GATT discovery will start in security_changed_cb. */
-        discover_after_security = true;
-        int sec_err = bt_conn_set_security(kbd_conn, BT_SECURITY_L2);
-        if (sec_err) {
-            printk("*** DONGLE: Security request failed: %d, trying discovery anyway ***\n", sec_err);
-            discover_after_security = false;
-            start_hid_discovery(kbd_conn);
-        } else {
-            printk("*** DONGLE: Security requested, waiting for pairing ***\n");
-        }
-
-        /* Restart scanning for Observer */
-        status_scanner_restart_scanning();
+        printk("*** DONGLE v6: Existing conn found to %s, disconnecting first ***\n", addr_str);
+        bt_conn_disconnect(existing, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        bt_conn_unref(existing);
+        /* Wait a bit for disconnect to complete, then retry */
+        state = STATE_IDLE;
+        k_work_schedule(&reconnect_work, K_MSEC(1000));
         return;
     }
-
-    /* No existing connection – create one */
 
     /* Stop scanning before connecting (Zephyr requirement) */
     int err = bt_le_scan_stop();
