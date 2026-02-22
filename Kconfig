@@ -146,16 +146,12 @@ config PROSPECTOR_DONGLE_MODE
     bool "Enable BLE Central dongle mode (USB HID forwarding)"
     default n
     depends on PROSPECTOR_MODE_SCANNER
-    select BT_CENTRAL
-    select BT_GATT_CLIENT
-    select BT_SMP
-    select BT_SMP_APP_PAIRING_ACCEPT
-    select BT_ECC
     select PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY
     help
       Enable dongle mode where Prospector acts as a BLE Central (HID host)
       and forwards keyboard HID reports to the PC via USB HID.
       The scanner Observer mode continues to work alongside for LCD status display.
+      Requires BT_CENTRAL, BT_GATT_CLIENT, BT_SMP to be enabled in conf file.
 
 config PROSPECTOR_DONGLE_TARGET_NAME
     string "Target keyboard BLE name (empty = first HID device)"
