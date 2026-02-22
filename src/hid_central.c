@@ -93,6 +93,7 @@ static bool discover_after_security;
 
 /* Flag: PSA diagnostic test already run */
 static bool psa_diag_done;
+static int psa_test_result = -999; /* -999 = not yet run */
 
 /* ------------------------------------------------------------------ */
 /* Forward declarations                                               */
@@ -626,11 +627,12 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v7: ECC_PUB=%d BT_ECC=%d P256M=%d MAX_CONN=%d ***\n",
+    printk("*** DONGLE v8: ECC_PUB=%d BT_ECC=%d P256M=%d MAX_CONN=%d PSA_TEST=%d ***\n",
            IS_ENABLED(CONFIG_PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY),
            IS_ENABLED(CONFIG_BT_ECC),
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED),
-           CONFIG_BT_MAX_CONN);
+           CONFIG_BT_MAX_CONN,
+           psa_test_result);
 
     /* One-time PSA import test with known-valid key */
     if (!psa_diag_done) {
@@ -774,18 +776,17 @@ SYS_INIT(hid_central_init, APPLICATION, 99);
 /* BT stack initialization (when ZMK_BLE is disabled)                 */
 /* ------------------------------------------------------------------ */
 
-/* Test psa_import_key with a known-valid P-256 public key (generator point G) */
+/* Test psa_import_key with a known-valid P-256 public key (generator point G).
+ * Stores result in psa_test_result global for printing from known-working printk. */
 static void test_psa_import(void)
 {
     /* P-256 generator point G in uncompressed form (0x04 || X || Y) */
     static const uint8_t test_key[65] = {
         0x04,
-        /* X = 6B17D1F2 E12C4247 F8BCE6E5 63A440F2 77037D81 2DEB33A0 F4A13945 D898C296 */
         0x6B, 0x17, 0xD1, 0xF2, 0xE1, 0x2C, 0x42, 0x47,
         0xF8, 0xBC, 0xE6, 0xE5, 0x63, 0xA4, 0x40, 0xF2,
         0x77, 0x03, 0x7D, 0x81, 0x2D, 0xEB, 0x33, 0xA0,
         0xF4, 0xA1, 0x39, 0x45, 0xD8, 0x98, 0xC2, 0x96,
-        /* Y = 4FE342E2 FE1A7F9B 8EE7EB4A 7C0F9E16 2BCE3357 6B315ECE CBB64068 37BF51F5 */
         0x4F, 0xE3, 0x42, 0xE2, 0xFE, 0x1A, 0x7F, 0x9B,
         0x8E, 0xE7, 0xEB, 0x4A, 0x7C, 0x0F, 0x9E, 0x16,
         0x2B, 0xCE, 0x33, 0x57, 0x6B, 0x31, 0x5E, 0xCE,
@@ -800,14 +801,10 @@ static void test_psa_import(void)
     psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
     psa_set_key_algorithm(&attr, PSA_ALG_ECDH);
 
-    psa_status_t ret = psa_import_key(&attr, test_key, sizeof(test_key), &handle);
-    printk("*** PSA_TEST: psa_import_key(G point) = %d ***\n", ret);
+    psa_test_result = (int)psa_import_key(&attr, test_key, sizeof(test_key), &handle);
 
-    if (ret == PSA_SUCCESS) {
+    if (psa_test_result == 0) {
         psa_destroy_key(handle);
-        printk("*** PSA_TEST: SUCCESS - PSA ECC public key import works! ***\n");
-    } else {
-        printk("*** PSA_TEST: FAILED - PSA subsystem broken for ECC pubkey ***\n");
     }
 
     psa_reset_key_attributes(&attr);
