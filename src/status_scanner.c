@@ -14,6 +14,9 @@
 
 #include <zmk/status_scanner.h>
 #include <zmk/status_advertisement.h>
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+#include <zmk/hid_central.h>
+#endif
 
 // Scanner stub functions for thread-safe display updates
 // Include path assumes build from zmk-config-prospector
@@ -414,10 +417,8 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
         /* Even when scanner is not started, forward connectable ads to HID Central */
         if (type == BT_GAP_ADV_TYPE_ADV_IND ||
             type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
-            extern void hid_central_on_scan_result(const bt_addr_le_t *addr,
-                                                    int8_t rssi, uint8_t type,
-                                                    struct net_buf_simple *buf);
-            hid_central_on_scan_result(addr, rssi, type, buf);
+            const char *cached_name = get_device_name(addr);
+            hid_central_on_scan_result(addr, rssi, type, buf, cached_name);
         }
 #endif
         return;
@@ -540,13 +541,11 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
     /* Forward connectable advertisements to HID Central for dongle mode.
      * Accept ADV_IND (undirected connectable) and ADV_DIRECT_IND (directed).
-     * Also accept scan responses which may carry the device name. */
+     * Name is looked up from the scan response cache. */
     if (type == BT_GAP_ADV_TYPE_ADV_IND ||
         type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND) {
-        extern void hid_central_on_scan_result(const bt_addr_le_t *addr,
-                                                int8_t rssi, uint8_t type,
-                                                struct net_buf_simple *buf);
-        hid_central_on_scan_result(addr, rssi, type, buf);
+        const char *cached_name = get_device_name(addr);
+        hid_central_on_scan_result(addr, rssi, type, buf, cached_name);
     }
 #endif
 }

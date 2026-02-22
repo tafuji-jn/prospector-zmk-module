@@ -494,7 +494,7 @@ static bool is_hid_service_in_ad(struct net_buf_simple *buf)
     return false;
 }
 
-static bool name_matches_target(struct net_buf_simple *buf)
+static bool name_matches_target(const char *name)
 {
 #ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
     const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
@@ -502,25 +502,14 @@ static bool name_matches_target(struct net_buf_simple *buf)
         return true; /* empty = accept any */
     }
 
-    struct net_buf_simple ad = *buf;
-    while (ad.len > 1) {
-        uint8_t len = net_buf_simple_pull_u8(&ad);
-        if (len == 0 || len > ad.len) {
-            break;
-        }
+    if (name == NULL || strcmp(name, "Unknown") == 0) {
+        return false; /* name not yet known from scan response */
+    }
 
-        uint8_t ad_type = net_buf_simple_pull_u8(&ad);
-        len--;
-
-        if ((ad_type == BT_DATA_NAME_COMPLETE ||
-             ad_type == BT_DATA_NAME_SHORTENED) && len > 0) {
-            if (len >= strlen(target) &&
-                memcmp(ad.data, target, strlen(target)) == 0) {
-                return true;
-            }
-        }
-
-        net_buf_simple_pull(&ad, len);
+    /* Prefix match: "lotom" matches "lotom", "lotom_left", etc. */
+    if (strncmp(name, target, strlen(target)) == 0) {
+        LOG_INF("Name match: '%s' matches target '%s'", name, target);
+        return true;
     }
     return false;
 #else
@@ -529,7 +518,8 @@ static bool name_matches_target(struct net_buf_simple *buf)
 }
 
 void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
-                                uint8_t type, struct net_buf_simple *buf)
+                                uint8_t type, struct net_buf_simple *buf,
+                                const char *name)
 {
     /* Only process if we're idle or looking to connect */
     if (state != STATE_IDLE && state != STATE_SCANNING) {
@@ -542,8 +532,9 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
             return; /* Not our bonded keyboard */
         }
     } else {
-        /* Not yet bonded – look for HID service or matching name */
-        if (!is_hid_service_in_ad(buf) && !name_matches_target(buf)) {
+        /* Not yet bonded – look for HID service or matching name.
+         * Name comes from scan response cache in status_scanner.c. */
+        if (!is_hid_service_in_ad(buf) && !name_matches_target(name)) {
             return;
         }
     }
