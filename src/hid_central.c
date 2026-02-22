@@ -667,9 +667,12 @@ static int hid_central_init(void)
     k_work_init_delayable(&reconnect_work, reconnect_work_handler);
 
     state = STATE_SCANNING;
+#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
     printk("*** DONGLE: HID Central initialized, target='%s' ***\n",
-           IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_TARGET_NAME) ?
-           CONFIG_PROSPECTOR_DONGLE_TARGET_NAME : "(any)");
+           CONFIG_PROSPECTOR_DONGLE_TARGET_NAME);
+#else
+    printk("*** DONGLE: HID Central initialized, target='(any)' ***\n");
+#endif
     LOG_INF("HID Central initialized, waiting for scan results");
     return 0;
 }

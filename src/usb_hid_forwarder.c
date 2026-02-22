@@ -95,15 +95,16 @@ static void int_in_ready_cb(const struct device *dev)
 }
 
 /* Callback when host sends LED output report (Caps Lock etc.) */
-static void set_report_cb(const struct device *dev,
-                           struct usb_setup_packet *setup,
-                           int32_t *len, uint8_t **data)
+static int set_report_cb(const struct device *dev,
+                          struct usb_setup_packet *setup,
+                          int32_t *len, uint8_t **data)
 {
     /* Report ID 1, Output report = LED indicators */
     if (*len > 0) {
         LOG_DBG("LED output report: 0x%02x", (*data)[0]);
         /* Could forward LED state back to keyboard via BLE if desired */
     }
+    return 0;
 }
 
 static const struct hid_ops usb_hid_ops = {
