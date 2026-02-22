@@ -19,10 +19,13 @@ endif()
 if(CONFIG_PROSPECTOR_DONGLE_MODE)
         target_sources(app PRIVATE src/hid_central.c)
         target_sources(app PRIVATE src/usb_hid_forwarder.c)
-        # v17: Wrap bt_pub_key_is_valid to test byte order hypothesis
-        # (swap vs raw) and bypass mbedtls_ecp_check_pubkey for ECDH.
+        # v18: Fix keyboard's invalid Y coordinate for ECDH.
+        # Wrap bt_pub_key_is_valid (skip validation),
+        # bt_dh_key_gen (compute correct Y from X before ECDH),
+        # mbedtls_ecp_check_pubkey (safety net bypass).
         zephyr_link_libraries(
                 -Wl,--wrap=bt_pub_key_is_valid
+                -Wl,--wrap=bt_dh_key_gen
                 -Wl,--wrap=mbedtls_ecp_check_pubkey
         )
 endif()

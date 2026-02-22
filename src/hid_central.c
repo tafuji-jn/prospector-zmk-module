@@ -643,7 +643,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v17c: PSA_USE=%d PSA_NOUSE=%d P256M=%d KEY_DUMP ***\n",
+    printk("*** DONGLE v18: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -863,15 +863,28 @@ SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 #endif
 
 /* ------------------------------------------------------------------ */
-/* v17c: Dump raw key bytes in single printk calls (fix log overflow)  */
-/* v17b: per-byte printk caused "messages dropped" in log buffer.      */
-/* Format hex into stack buffer, print once per coordinate.            */
-/* Also bypass mbedtls_ecp_check_pubkey for ECDH.                     */
+/* v18: Fix keyboard's invalid Y coordinate by computing correct Y     */
+/* from X using P-256 curve equation, then wrap bt_dh_key_gen to use   */
+/* the corrected key for ECDH.                                         */
+/*                                                                     */
+/* Analysis: keyboard's X coord (after LE→BE swap) IS valid on P-256,  */
+/* but Y coord is completely wrong. Likely TinyCrypt serialization bug. */
+/* Since ECDH shared secret = X(d*Q), and d*(-Q) = -(d*Q) which has   */
+/* the same X, either sign of Y produces the same shared secret.       */
 /* ------------------------------------------------------------------ */
 
 #include <mbedtls/ecp.h>
+#include <mbedtls/bignum.h>
 
-extern bool __real_bt_pub_key_is_valid(const uint8_t key[64]);
+/* Reverse-copy n bytes (byte-swap LE↔BE) */
+static void memcpy_swap(void *dst, const void *src, size_t n)
+{
+    const uint8_t *s = src;
+    uint8_t *d = dst;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[n - 1 - i];
+    }
+}
 
 static void hex_format(char *out, const uint8_t *data, size_t len)
 {
@@ -883,19 +896,142 @@ static void hex_format(char *out, const uint8_t *data, size_t len)
     out[len * 2] = '\0';
 }
 
+/*
+ * Compute valid Y for X on P-256: Y = sqrt(X³ + aX + b) mod p
+ * P-256 has p ≡ 3 (mod 4), so sqrt(z) = z^((p+1)/4) mod p.
+ * x_be and y_be are 32-byte big-endian buffers.
+ * Returns 0 on success, -1 if X has no valid Y on P-256.
+ */
+static int compute_p256_y(const uint8_t x_be[32], uint8_t y_be[32])
+{
+    /* P-256 parameters (big-endian) */
+    static const uint8_t p256_p[] = {
+        0xFF,0xFF,0xFF,0xFF, 0x00,0x00,0x00,0x01,
+        0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+        0x00,0x00,0x00,0x00, 0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF, 0xFF,0xFF,0xFF,0xFF
+    };
+    static const uint8_t p256_b[] = {
+        0x5A,0xC6,0x35,0xD8, 0xAA,0x3A,0x93,0xE7,
+        0xB3,0xEB,0xBD,0x55, 0x76,0x98,0x86,0xBC,
+        0x65,0x1D,0x06,0xB0, 0xCC,0x53,0xB0,0xF6,
+        0x3B,0xCE,0x3C,0x3E, 0x27,0xD2,0x60,0x4B
+    };
+
+    int ret = -1;
+    mbedtls_mpi X, Y, z, a_mpi, b_mpi, p_mpi, exp, tmp;
+    mbedtls_mpi_init(&X);     mbedtls_mpi_init(&Y);
+    mbedtls_mpi_init(&z);     mbedtls_mpi_init(&a_mpi);
+    mbedtls_mpi_init(&b_mpi); mbedtls_mpi_init(&p_mpi);
+    mbedtls_mpi_init(&exp);   mbedtls_mpi_init(&tmp);
+
+    /* Load parameters */
+    mbedtls_mpi_read_binary(&p_mpi, p256_p, 32);
+    mbedtls_mpi_read_binary(&b_mpi, p256_b, 32);
+    mbedtls_mpi_read_binary(&X, x_be, 32);
+
+    /* a = p - 3 (equivalent to -3 mod p) */
+    mbedtls_mpi_copy(&a_mpi, &p_mpi);
+    mbedtls_mpi_sub_int(&a_mpi, &a_mpi, 3);
+
+    /* z = X² mod p */
+    mbedtls_mpi_mul_mpi(&z, &X, &X);
+    mbedtls_mpi_mod_mpi(&z, &z, &p_mpi);
+
+    /* z = X³ mod p */
+    mbedtls_mpi_mul_mpi(&z, &z, &X);
+    mbedtls_mpi_mod_mpi(&z, &z, &p_mpi);
+
+    /* tmp = a * X mod p */
+    mbedtls_mpi_mul_mpi(&tmp, &a_mpi, &X);
+    mbedtls_mpi_mod_mpi(&tmp, &tmp, &p_mpi);
+
+    /* z = X³ + aX mod p */
+    mbedtls_mpi_add_mpi(&z, &z, &tmp);
+    mbedtls_mpi_mod_mpi(&z, &z, &p_mpi);
+
+    /* z = X³ + aX + b mod p */
+    mbedtls_mpi_add_mpi(&z, &z, &b_mpi);
+    mbedtls_mpi_mod_mpi(&z, &z, &p_mpi);
+
+    /* Y = z^((p+1)/4) mod p */
+    mbedtls_mpi_copy(&exp, &p_mpi);
+    mbedtls_mpi_add_int(&exp, &exp, 1);
+    mbedtls_mpi_shift_r(&exp, 2); /* divide by 4 */
+
+    mbedtls_mpi_exp_mod(&Y, &z, &exp, &p_mpi, NULL);
+
+    /* Verify: Y² mod p == z */
+    mbedtls_mpi_mul_mpi(&tmp, &Y, &Y);
+    mbedtls_mpi_mod_mpi(&tmp, &tmp, &p_mpi);
+    if (mbedtls_mpi_cmp_mpi(&tmp, &z) != 0) {
+        printk("*** Y_FIX: No valid Y for this X ***\n");
+        goto cleanup;
+    }
+
+    /* Write Y as big-endian */
+    mbedtls_mpi_write_binary(&Y, y_be, 32);
+    ret = 0;
+
+cleanup:
+    mbedtls_mpi_free(&X);     mbedtls_mpi_free(&Y);
+    mbedtls_mpi_free(&z);     mbedtls_mpi_free(&a_mpi);
+    mbedtls_mpi_free(&b_mpi); mbedtls_mpi_free(&p_mpi);
+    mbedtls_mpi_free(&exp);   mbedtls_mpi_free(&tmp);
+    return ret;
+}
+
+/* --- bt_pub_key_is_valid wrapper: dump key + return true --- */
+
+extern bool __real_bt_pub_key_is_valid(const uint8_t key[64]);
+
 bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
 {
-    char hex_buf[65]; /* 32 bytes = 64 hex chars + null */
+    char hex_buf[65];
 
     hex_format(hex_buf, &key[0], 32);
     printk("*** KEY_X: %s ***\n", hex_buf);
 
     hex_format(hex_buf, &key[32], 32);
-    printk("*** KEY_Y: %s ***\n", hex_buf);
+    printk("*** KEY_Y_ORIG: %s ***\n", hex_buf);
 
     printk("*** KEY_VALID: FORCED TRUE ***\n");
     return true;
 }
+
+/* --- bt_dh_key_gen wrapper: fix Y coordinate before ECDH --- */
+
+extern int __real_bt_dh_key_gen(const uint8_t remote_pk[64],
+                                void (*cb)(const uint8_t key[32]));
+
+int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
+                          void (*cb)(const uint8_t key[32]))
+{
+    uint8_t fixed_pk[64];
+    uint8_t x_be[32], y_be[32];
+    char hex_buf[65];
+
+    memcpy(fixed_pk, remote_pk, 64);
+
+    /* Convert X from LE (wire) to BE (math) */
+    memcpy_swap(x_be, remote_pk, 32);
+
+    /* Compute valid Y on P-256 for this X */
+    if (compute_p256_y(x_be, y_be) == 0) {
+        /* Convert Y from BE back to LE (wire format) */
+        memcpy_swap(&fixed_pk[32], y_be, 32);
+
+        hex_format(hex_buf, &fixed_pk[32], 32);
+        printk("*** KEY_Y_FIXED: %s ***\n", hex_buf);
+        printk("*** ECDH_FIX: Y coordinate corrected ***\n");
+    } else {
+        printk("*** ECDH_FIX: Cannot compute Y, using original ***\n");
+    }
+
+    return __real_bt_dh_key_gen(fixed_pk, cb);
+}
+
+/* --- mbedtls_ecp_check_pubkey bypass (safety net for ECDH internals) --- */
 
 extern int __real_mbedtls_ecp_check_pubkey(const mbedtls_ecp_group *grp,
                                             const mbedtls_ecp_point *pt);
@@ -909,5 +1045,3 @@ int __wrap_mbedtls_ecp_check_pubkey(const mbedtls_ecp_group *grp,
     }
     return 0;
 }
-
-
