@@ -589,11 +589,32 @@ static void connect_work_handler(struct k_work *work)
 
     printk("*** DONGLE: BT_MAX_CONN=%d ***\n", CONFIG_BT_MAX_CONN);
 
+    /* Check if a connection to this address already exists.
+     * ZMK/Zephyr may auto-accept incoming BLE connections from
+     * the keyboard, so we can reuse that connection directly. */
+    struct bt_conn *existing = bt_conn_lookup_addr_le(BT_ID_DEFAULT, &pending_addr);
+    if (existing) {
+        printk("*** DONGLE: Existing connection found to %s, reusing ***\n", addr_str);
+        kbd_conn = existing; /* already ref'd by lookup */
+        start_hid_discovery(kbd_conn);
+        /* Restart scanning for Observer */
+        status_scanner_restart_scanning();
+        return;
+    }
+
+    /* No existing connection – create one */
+
     /* Stop scanning before connecting (Zephyr requirement) */
     int err = bt_le_scan_stop();
     if (err) {
         printk("*** DONGLE: Scan stop failed: %d ***\n", err);
         LOG_WRN("Scan stop failed: %d", err);
+    }
+
+    /* Ensure kbd_conn is NULL before calling bt_conn_le_create */
+    if (kbd_conn) {
+        bt_conn_unref(kbd_conn);
+        kbd_conn = NULL;
     }
 
     struct bt_conn_le_create_param create_param =
