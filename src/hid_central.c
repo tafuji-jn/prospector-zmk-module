@@ -620,13 +620,13 @@ static void connect_work_handler(struct k_work *work)
     }
     pending_connect = false;
 
-    /* Run PSA diagnostic (once, when USB serial is ready) */
-    run_psa_diagnostic();
-
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v3: BT_MAX_CONN=%d ***\n", CONFIG_BT_MAX_CONN);
+    printk("*** DONGLE v4: ECC_PUB=%d BT_ECC=%d MAX_CONN=%d ***\n",
+           IS_ENABLED(CONFIG_PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY),
+           IS_ENABLED(CONFIG_BT_ECC),
+           CONFIG_BT_MAX_CONN);
 
     /* Check if a connection to this address already exists.
      * ZMK/Zephyr may auto-accept incoming BLE connections from
