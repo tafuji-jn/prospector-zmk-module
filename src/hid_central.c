@@ -642,7 +642,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v10: PSA_WQ=%d PSA_RX=%d P256M=%d ***\n",
+    printk("*** DONGLE v14: PSA_WQ=%d PSA_RX=%d P256M=%d ***\n",
            psa_test_result, psa_bt_rx_result,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -844,30 +844,3 @@ static int dongle_bt_enable(void)
 SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 #endif
 
-/* ------------------------------------------------------------------ */
-/* ------------------------------------------------------------------ */
-/* Force Legacy Pairing by disabling SC at runtime                    */
-/* The keyboard generates invalid P-256 keys (both byte orders fail   */
-/* validation AND ECDH). Legacy pairing bypasses ECDH entirely.       */
-/* Uses GCC --wrap linker option (see CMakeLists.txt)                 */
-/* ------------------------------------------------------------------ */
-
-#include <zephyr/bluetooth/crypto.h>
-
-struct bt_pub_key_cb;
-
-extern const uint8_t *__real_bt_pub_key_get(void);
-extern int __real_bt_pub_key_gen(struct bt_pub_key_cb *new_cb);
-
-const uint8_t *__wrap_bt_pub_key_get(void)
-{
-    /* Return NULL = "no ECC key available" → SMP won't set SC bit */
-    return NULL;
-}
-
-int __wrap_bt_pub_key_gen(struct bt_pub_key_cb *new_cb)
-{
-    /* Block key generation → SC stays unavailable */
-    printk("*** DONGLE: bt_pub_key_gen blocked (forcing Legacy Pairing) ***\n");
-    return -ENOTSUP;
-}
