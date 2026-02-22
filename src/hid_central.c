@@ -95,6 +95,7 @@ static bool discover_after_security;
 static bool psa_diag_done;
 static int psa_test_result = -999;     /* -999 = not yet run */
 static int psa_bt_rx_result = -999;    /* PSA test on BT RX thread */
+static int psa_test_nousage = -999;    /* test with usage_flags=0 (like bt_pub_key_is_valid) */
 
 /* ------------------------------------------------------------------ */
 /* Forward declarations                                               */
@@ -791,8 +792,6 @@ SYS_INIT(hid_central_init, APPLICATION, 99);
 /* Test psa_import_key with a known-valid P-256 public key (generator point G).
  * Tests BOTH with ECDH usage flags (our original test) and with usage=0
  * (same attributes as bt_pub_key_is_valid) to check if attributes matter. */
-static int psa_test_nousage = -999;  /* test with usage_flags=0 */
-
 static void test_psa_import(void)
 {
     /* P-256 generator point G in uncompressed form (0x04 || X || Y) */
