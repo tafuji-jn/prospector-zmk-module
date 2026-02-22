@@ -365,6 +365,7 @@ static void subscribe_next_input_report(int idx)
 
     /* All input reports subscribed – we're ready */
     state = STATE_READY;
+    printk("*** DONGLE: READY - forwarding HID reports to USB ***\n");
     LOG_INF("HID Central ready – forwarding reports to USB");
 }
 
@@ -379,6 +380,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     }
 
     if (err) {
+        printk("*** DONGLE: Connection failed: %d ***\n", err);
         LOG_ERR("Connection failed: %d", err);
         bt_conn_unref(kbd_conn);
         kbd_conn = NULL;
@@ -389,6 +391,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
 
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr_str, sizeof(addr_str));
+    printk("*** DONGLE: Connected to %s ***\n", addr_str);
     LOG_INF("Connected to %s", addr_str);
 
     state = STATE_CONNECTING;
@@ -418,6 +421,7 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
         return;
     }
 
+    printk("*** DONGLE: Disconnected (reason 0x%02x) ***\n", reason);
     LOG_INF("Disconnected (reason 0x%02x)", reason);
 
     bt_conn_unref(kbd_conn);
@@ -531,6 +535,7 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
         if (bt_addr_le_cmp(addr, &bonded_addr) != 0) {
             return; /* Not our bonded keyboard */
         }
+        printk("*** DONGLE: Bonded addr matched, connecting ***\n");
     } else {
 #ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
         const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
@@ -541,6 +546,8 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
             if (!name_matches_target(name)) {
                 return;
             }
+            printk("*** DONGLE: Name '%s' matched target '%s' ***\n",
+                   name ? name : "(null)", target);
         } else
 #endif
         {
@@ -548,16 +555,20 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
             if (!is_hid_service_in_ad(buf)) {
                 return;
             }
+            printk("*** DONGLE: HID service found, connecting ***\n");
         }
     }
 
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
+    printk("*** DONGLE: Connecting to %s (RSSI %d, type 0x%02x) ***\n",
+           addr_str, rssi, type);
     LOG_INF("Found target keyboard: %s (RSSI %d)", addr_str, rssi);
 
     /* Stop scanning before connecting (Zephyr requirement) */
     int err = bt_le_scan_stop();
     if (err) {
+        printk("*** DONGLE: Scan stop failed: %d ***\n", err);
         LOG_WRN("Scan stop failed: %d", err);
     }
 
@@ -576,12 +587,15 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
 
     err = bt_conn_le_create(addr, &create_param, &conn_param, &kbd_conn);
     if (err) {
+        printk("*** DONGLE: bt_conn_le_create failed: %d ***\n", err);
         LOG_ERR("Create connection failed: %d", err);
         state = STATE_IDLE;
         /* Restart scanning */
         extern int status_scanner_restart_scanning(void);
         status_scanner_restart_scanning();
         schedule_reconnect();
+    } else {
+        printk("*** DONGLE: Connection initiated ***\n");
     }
 }
 
@@ -653,6 +667,9 @@ static int hid_central_init(void)
     k_work_init_delayable(&reconnect_work, reconnect_work_handler);
 
     state = STATE_SCANNING;
+    printk("*** DONGLE: HID Central initialized, target='%s' ***\n",
+           IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_TARGET_NAME) ?
+           CONFIG_PROSPECTOR_DONGLE_TARGET_NAME : "(any)");
     LOG_INF("HID Central initialized, waiting for scan results");
     return 0;
 }

@@ -458,6 +458,14 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
             }
             
             store_device_name(addr, device_name);
+
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+            /* Notify HID Central immediately when a device name is received.
+             * This is critical because the name typically arrives in the SCAN_RSP
+             * packet, and we need to trigger connection as soon as the name is known
+             * rather than waiting for the next ADV_IND cycle. */
+            hid_central_on_scan_result(addr, rssi, type, buf, device_name);
+#endif
         }
         
         // Check for Prospector manufacturer data (26 bytes expected)
