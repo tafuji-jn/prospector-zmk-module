@@ -643,7 +643,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v16: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
+    printk("*** DONGLE v16b: PSA_USE=%d PSA_NOUSE=%d P256M=%d ECP_BYPASS=1 ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -855,5 +855,29 @@ static int dongle_bt_enable(void)
 /* Run before scanner init (priority 99) */
 SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 #endif
+
+/* ------------------------------------------------------------------ */
+/* v16: Bypass MbedTLS ECC point validation                            */
+/* mbedtls_ecp_check_pubkey is called from both psa_import_key and     */
+/* psa_raw_key_agreement (ECDH). If the keyboard's key IS on P-256     */
+/* but validation has a bug, bypassing lets ECDH compute correct       */
+/* shared secret. If key is truly off-curve, SMP confirm will fail.    */
+/* ------------------------------------------------------------------ */
+
+#include <mbedtls/ecp.h>
+
+extern int __real_mbedtls_ecp_check_pubkey(const mbedtls_ecp_group *grp,
+                                            const mbedtls_ecp_point *pt);
+
+int __wrap_mbedtls_ecp_check_pubkey(const mbedtls_ecp_group *grp,
+                                     const mbedtls_ecp_point *pt)
+{
+    int real_result = __real_mbedtls_ecp_check_pubkey(grp, pt);
+    if (real_result != 0) {
+        printk("*** ECP_CHECK: BYPASSED (real=%d, returning 0) ***\n",
+               real_result);
+    }
+    return 0; /* Always pass */
+}
 
 

@@ -19,6 +19,12 @@ endif()
 if(CONFIG_PROSPECTOR_DONGLE_MODE)
         target_sources(app PRIVATE src/hid_central.c)
         target_sources(app PRIVATE src/usb_hid_forwarder.c)
+        # v16: Bypass MbedTLS ECC point validation to test ECDH with
+        # keyboard's "invalid" key. If key is actually valid (PC pairs OK),
+        # ECDH will succeed. If truly invalid, SMP confirm will fail.
+        zephyr_link_libraries(
+                -Wl,--wrap=mbedtls_ecp_check_pubkey
+        )
 endif()
 
 # DISABLED FOR DEBUG: Custom display/LVGL drivers may be causing boot issues
