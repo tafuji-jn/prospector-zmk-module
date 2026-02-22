@@ -153,6 +153,12 @@ config PROSPECTOR_DONGLE_MODE
       The scanner Observer mode continues to work alongside for LCD status display.
       Requires BT_CENTRAL, BT_GATT_CLIENT, BT_SMP to be enabled in conf file.
 
+# P256M lightweight driver may return PSA_ERROR_INVALID_ARGUMENT (-135) for
+# valid ECC public keys during LESC pairing. Force it off in dongle mode
+# to use the full MbedTLS builtin ECC implementation instead.
+config MBEDTLS_PSA_P256M_DRIVER_ENABLED
+    default n if PROSPECTOR_DONGLE_MODE
+
 config PROSPECTOR_DONGLE_TARGET_NAME
     string "Target keyboard BLE name (empty = first HID device)"
     default ""

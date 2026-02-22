@@ -623,9 +623,10 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v4: ECC_PUB=%d BT_ECC=%d MAX_CONN=%d ***\n",
+    printk("*** DONGLE v5: ECC_PUB=%d BT_ECC=%d P256M=%d MAX_CONN=%d ***\n",
            IS_ENABLED(CONFIG_PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY),
            IS_ENABLED(CONFIG_BT_ECC),
+           IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED),
            CONFIG_BT_MAX_CONN);
 
     /* Check if a connection to this address already exists.
