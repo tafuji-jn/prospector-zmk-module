@@ -81,6 +81,11 @@ static struct bt_gatt_subscribe_params sub_params[MAX_HID_REPORTS];
 /* Work for reconnection */
 static struct k_work_delayable reconnect_work;
 
+/* Deferred connection work (must not call bt_conn_le_create from scan callback) */
+static struct k_work connect_work;
+static bt_addr_le_t pending_addr;
+static bool pending_connect;
+
 /* ------------------------------------------------------------------ */
 /* Forward declarations                                               */
 /* ------------------------------------------------------------------ */
@@ -408,7 +413,6 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     start_hid_discovery(conn);
 
     /* Restart scanning so Observer can keep receiving advertisements */
-    extern int status_scanner_restart_scanning(void);
     int scan_err = status_scanner_restart_scanning();
     if (scan_err) {
         LOG_WRN("Failed to restart scanning after connect: %d", scan_err);
@@ -561,9 +565,29 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
 
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
-    printk("*** DONGLE: Connecting to %s (RSSI %d, type 0x%02x) ***\n",
+    printk("*** DONGLE: Target found: %s (RSSI %d, type 0x%02x) ***\n",
            addr_str, rssi, type);
     LOG_INF("Found target keyboard: %s (RSSI %d)", addr_str, rssi);
+
+    /* Defer connection to work queue – bt_conn_le_create must NOT be
+     * called from within the scan callback (BLE RX thread context). */
+    bt_addr_le_copy(&pending_addr, addr);
+    pending_connect = true;
+    state = STATE_CONNECTING;
+    k_work_submit(&connect_work);
+}
+
+static void connect_work_handler(struct k_work *work)
+{
+    if (!pending_connect || state != STATE_CONNECTING) {
+        return;
+    }
+    pending_connect = false;
+
+    char addr_str[BT_ADDR_LE_STR_LEN];
+    bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
+
+    printk("*** DONGLE: BT_MAX_CONN=%d ***\n", CONFIG_BT_MAX_CONN);
 
     /* Stop scanning before connecting (Zephyr requirement) */
     int err = bt_le_scan_stop();
@@ -571,8 +595,6 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
         printk("*** DONGLE: Scan stop failed: %d ***\n", err);
         LOG_WRN("Scan stop failed: %d", err);
     }
-
-    state = STATE_CONNECTING;
 
     struct bt_conn_le_create_param create_param =
         BT_CONN_LE_CREATE_PARAM_INIT(
@@ -585,17 +607,17 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
         6, 6, 0, 400   /* 7.5ms interval, no latency, 4s timeout */
     );
 
-    err = bt_conn_le_create(addr, &create_param, &conn_param, &kbd_conn);
+    printk("*** DONGLE: Calling bt_conn_le_create for %s ***\n", addr_str);
+    err = bt_conn_le_create(&pending_addr, &create_param, &conn_param, &kbd_conn);
     if (err) {
         printk("*** DONGLE: bt_conn_le_create failed: %d ***\n", err);
         LOG_ERR("Create connection failed: %d", err);
         state = STATE_IDLE;
         /* Restart scanning */
-        extern int status_scanner_restart_scanning(void);
         status_scanner_restart_scanning();
         schedule_reconnect();
     } else {
-        printk("*** DONGLE: Connection initiated ***\n");
+        printk("*** DONGLE: Connection initiated to %s ***\n", addr_str);
     }
 }
 
@@ -642,10 +664,9 @@ static void reconnect_work_handler(struct k_work *work)
     int err = bt_conn_le_create(&bonded_addr, &create_param,
                                  &conn_param, &kbd_conn);
     if (err) {
+        printk("*** DONGLE: Reconnect failed: %d ***\n", err);
         LOG_WRN("Reconnect create failed: %d, will retry", err);
         state = STATE_IDLE;
-        /* Restart scanning so Observer keeps working */
-        extern int status_scanner_restart_scanning(void);
         status_scanner_restart_scanning();
         schedule_reconnect();
     }
@@ -665,6 +686,7 @@ static void schedule_reconnect(void)
 static int hid_central_init(void)
 {
     k_work_init_delayable(&reconnect_work, reconnect_work_handler);
+    k_work_init(&connect_work, connect_work_handler);
 
     state = STATE_SCANNING;
 #ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
