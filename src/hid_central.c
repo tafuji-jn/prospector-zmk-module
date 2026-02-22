@@ -659,7 +659,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v19b: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX+DHKEY_DUMP ***\n",
+    printk("*** DONGLE v20: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX+DEBUG_KEY ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
