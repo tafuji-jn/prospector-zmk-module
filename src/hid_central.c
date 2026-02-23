@@ -88,6 +88,9 @@ static struct k_work connect_work;
 static bt_addr_le_t pending_addr;
 static bool pending_connect;
 
+/* Deferred GATT discovery work (delay after security establishment) */
+static struct k_work_delayable discovery_work;
+
 /* Flag: discovery is waiting for security to be established */
 static bool discover_after_security;
 
@@ -233,10 +236,18 @@ done:
 
 /*
  * Discovery proceeds in phases:
- *  1. Discover all characteristics in HID service
+ *  0. Discover HID primary service (0x1812) to get handle range
+ *  1. Discover HID Report characteristics (0x2A4D) within service range
  *  2. For each Report characteristic, read its Report Reference descriptor
  *  3. Subscribe to Input Report notifications
  */
+
+/* HID service handle range (from phase 0) */
+static uint16_t hid_svc_start;
+static uint16_t hid_svc_end;
+
+/* Second discover_params for phase 1 (characteristic discovery) */
+static struct bt_gatt_discover_params disc_params2;
 
 /* Phase 2 storage for Report Reference reads */
 static struct bt_gatt_read_params ref_read_params[MAX_HID_REPORTS];
@@ -278,19 +289,22 @@ static void read_report_references(struct bt_conn *conn)
     }
 }
 
-static uint8_t discover_cb(struct bt_conn *conn,
-                            const struct bt_gatt_attr *attr,
-                            struct bt_gatt_discover_params *params)
+/* Phase 1 callback: discover HID Report characteristics within service */
+static uint8_t discover_chars_cb(struct bt_conn *conn,
+                                  const struct bt_gatt_attr *attr,
+                                  struct bt_gatt_discover_params *params)
 {
     if (!attr) {
-        LOG_INF("HID discovery complete, found %d reports", report_count);
+        printk("*** DONGLE: Char discovery done, found %d reports ***\n",
+               report_count);
+        LOG_INF("HID char discovery complete, found %d reports", report_count);
         if (report_count > 0) {
             read_report_references(conn);
         } else {
-            LOG_ERR("No HID Report characteristics found");
-            /* Disconnect – don't set STATE_IDLE while connected,
-             * as that allows the scan handler to trigger a competing
-             * reconnection.  disconnected_cb will set STATE_IDLE. */
+            LOG_ERR("No HID Report characteristics found in service 0x%04x-0x%04x",
+                    hid_svc_start, hid_svc_end);
+            printk("*** DONGLE: No HID Report chars in range 0x%04x-0x%04x ***\n",
+                   hid_svc_start, hid_svc_end);
             if (kbd_conn) {
                 bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
             }
@@ -300,38 +314,87 @@ static uint8_t discover_cb(struct bt_conn *conn,
 
     struct bt_gatt_chrc *chrc = (struct bt_gatt_chrc *)attr->user_data;
 
-    /* Look for HID Report characteristics */
-    if (bt_uuid_cmp(chrc->uuid, BT_UUID_HID_REPORT) == 0) {
-        if (report_count < MAX_HID_REPORTS) {
-            reports[report_count].handle = chrc->value_handle;
-            reports[report_count].ccc_handle = 0; /* will be derived */
-            reports[report_count].report_id = 0;
-            reports[report_count].report_type = 0;
-            reports[report_count].subscribed = false;
-            LOG_INF("Found HID Report char at handle 0x%04x (#%d)",
-                    chrc->value_handle, report_count);
-            report_count++;
-        }
+    if (report_count < MAX_HID_REPORTS) {
+        reports[report_count].handle = chrc->value_handle;
+        reports[report_count].ccc_handle = 0;
+        reports[report_count].report_id = 0;
+        reports[report_count].report_type = 0;
+        reports[report_count].subscribed = false;
+        printk("*** DONGLE: Found Report char at 0x%04x (#%d) ***\n",
+               chrc->value_handle, report_count);
+        LOG_INF("Found HID Report char at handle 0x%04x (#%d)",
+                chrc->value_handle, report_count);
+        report_count++;
     }
 
     return BT_GATT_ITER_CONTINUE;
+}
+
+/* Phase 0 callback: discover HID primary service */
+static uint8_t discover_svc_cb(struct bt_conn *conn,
+                                const struct bt_gatt_attr *attr,
+                                struct bt_gatt_discover_params *params)
+{
+    if (!attr) {
+        printk("*** DONGLE: HID Service NOT found! ***\n");
+        LOG_ERR("HID Service (0x1812) not found on peer");
+        if (kbd_conn) {
+            bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        }
+        return BT_GATT_ITER_STOP;
+    }
+
+    struct bt_gatt_service_val *svc = (struct bt_gatt_service_val *)attr->user_data;
+    hid_svc_start = attr->handle;
+    hid_svc_end = svc->end_handle;
+
+    printk("*** DONGLE: HID Service found at 0x%04x-0x%04x ***\n",
+           hid_svc_start, hid_svc_end);
+    LOG_INF("HID Service found: handles 0x%04x-0x%04x",
+            hid_svc_start, hid_svc_end);
+
+    /* Phase 1: discover characteristics within HID service range */
+    memset(&disc_params2, 0, sizeof(disc_params2));
+    disc_params2.uuid = BT_UUID_HID_REPORT;
+    disc_params2.func = discover_chars_cb;
+    disc_params2.start_handle = hid_svc_start + 1;
+    disc_params2.end_handle = hid_svc_end;
+    disc_params2.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+
+    int err = bt_gatt_discover(conn, &disc_params2);
+    if (err) {
+        printk("*** DONGLE: Char discovery start failed: %d ***\n", err);
+        LOG_ERR("Characteristic discovery failed: %d", err);
+        if (kbd_conn) {
+            bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        }
+    }
+
+    /* Stop iterating services – we only need the first HID service */
+    return BT_GATT_ITER_STOP;
 }
 
 static void start_hid_discovery(struct bt_conn *conn)
 {
     report_count = 0;
     memset(reports, 0, sizeof(reports));
+    hid_svc_start = 0;
+    hid_svc_end = 0;
 
     state = STATE_DISCOVERING;
 
-    disc_params.uuid = BT_UUID_HID_REPORT;
-    disc_params.func = discover_cb;
+    printk("*** DONGLE: Starting HID service discovery ***\n");
+
+    /* Phase 0: discover HID primary service (0x1812) to get handle range */
+    disc_params.uuid = BT_UUID_HID_SERVICE;
+    disc_params.func = discover_svc_cb;
     disc_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
     disc_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
-    disc_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+    disc_params.type = BT_GATT_DISCOVER_PRIMARY;
 
     int err = bt_gatt_discover(conn, &disc_params);
     if (err) {
+        printk("*** DONGLE: HID service discovery start failed: %d ***\n", err);
         LOG_ERR("HID GATT discovery start failed: %d", err);
         state = STATE_IDLE;
     }
@@ -469,6 +532,9 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     printk("*** DONGLE: Disconnected (reason 0x%02x) ***\n", reason);
     LOG_INF("Disconnected (reason 0x%02x)", reason);
 
+    /* Cancel any pending deferred discovery */
+    k_work_cancel_delayable(&discovery_work);
+
     bt_conn_unref(kbd_conn);
     kbd_conn = NULL;
     state = STATE_IDLE;
@@ -485,6 +551,15 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     }
 
     schedule_reconnect();
+}
+
+static void discovery_work_handler(struct k_work *work)
+{
+    if (!kbd_conn || state != STATE_CONNECTING) {
+        return;
+    }
+    printk("*** DONGLE: Starting HID discovery (deferred) ***\n");
+    start_hid_discovery(kbd_conn);
 }
 
 static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
@@ -517,11 +592,12 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
         bt_addr_le_copy(&bonded_addr, bt_conn_get_dst(conn));
         has_bonded_addr = true;
 
-        /* If we were waiting to discover, do it now */
+        /* If we were waiting to discover, defer slightly to let
+         * the link settle after encryption establishment. */
         if (discover_after_security) {
             discover_after_security = false;
-            printk("*** DONGLE: Starting HID discovery after security ***\n");
-            start_hid_discovery(conn);
+            printk("*** DONGLE: Scheduling HID discovery in 500ms ***\n");
+            k_work_schedule(&discovery_work, K_MSEC(500));
         }
     }
 }
@@ -664,7 +740,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v26: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
+    printk("*** DONGLE v27: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -791,6 +867,7 @@ static void schedule_reconnect(void)
 static int hid_central_init(void)
 {
     k_work_init_delayable(&reconnect_work, reconnect_work_handler);
+    k_work_init_delayable(&discovery_work, discovery_work_handler);
     k_work_init(&connect_work, connect_work_handler);
 
     state = STATE_SCANNING;
