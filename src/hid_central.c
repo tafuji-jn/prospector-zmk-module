@@ -1080,6 +1080,7 @@ int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
             };
 
             /* --- Method A: mbedtls_ecp_mul --- */
+            /* MbedTLS 3.x: use read/write_binary to avoid PRIVATE members */
             mbedtls_ecp_group grp;
             mbedtls_ecp_point Q, R;
             mbedtls_mpi d_mpi;
@@ -1088,21 +1089,34 @@ int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
             mbedtls_ecp_point_init(&R);
             mbedtls_mpi_init(&d_mpi);
 
+            /* Load Q from uncompressed point: 0x04 || X_BE || Y_BE */
+            uint8_t q_buf[65];
+            q_buf[0] = 0x04;
+            memcpy(&q_buf[1], x_be, 32);
+            memcpy(&q_buf[33], y_be, 32);
+
             int rc = mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1);
             if (rc == 0) rc = mbedtls_mpi_read_binary(&d_mpi, test_d_be, 32);
-            if (rc == 0) rc = mbedtls_mpi_read_binary(&Q.X, x_be, 32);
-            if (rc == 0) rc = mbedtls_mpi_read_binary(&Q.Y, y_be, 32);
-            if (rc == 0) rc = mbedtls_mpi_lset(&Q.Z, 1);
+            if (rc == 0) rc = mbedtls_ecp_point_read_binary(&grp, &Q, q_buf, 65);
             if (rc == 0) rc = mbedtls_ecp_mul(&grp, &R, &d_mpi, &Q, NULL, NULL);
 
             uint8_t ecp_dhkey_be[32];
             if (rc == 0) {
-                mbedtls_mpi_write_binary(&R.X, ecp_dhkey_be, 32);
-                char ecp_hex[65];
-                uint8_t ecp_le[32];
-                memcpy_swap(ecp_le, ecp_dhkey_be, 32);
-                hex_format(ecp_hex, ecp_le, 32);
-                printk("*** ECDH_TEST_ECP:  %s ***\n", ecp_hex);
+                /* Write R as uncompressed: 0x04 || RX_BE || RY_BE */
+                uint8_t r_buf[65];
+                size_t olen;
+                rc = mbedtls_ecp_point_write_binary(&grp, &R,
+                        MBEDTLS_ECP_PF_UNCOMPRESSED, &olen, r_buf, 65);
+                if (rc == 0 && olen >= 33) {
+                    memcpy(ecp_dhkey_be, &r_buf[1], 32); /* X coordinate */
+                    char ecp_hex[65];
+                    uint8_t ecp_le[32];
+                    memcpy_swap(ecp_le, ecp_dhkey_be, 32);
+                    hex_format(ecp_hex, ecp_le, 32);
+                    printk("*** ECDH_TEST_ECP:  %s ***\n", ecp_hex);
+                } else {
+                    printk("*** ECDH_TEST_ECP:  write_binary failed rc=%d ***\n", rc);
+                }
             } else {
                 printk("*** ECDH_TEST_ECP:  FAILED rc=%d ***\n", rc);
             }
