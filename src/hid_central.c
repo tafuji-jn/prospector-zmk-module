@@ -288,7 +288,12 @@ static uint8_t discover_cb(struct bt_conn *conn,
             read_report_references(conn);
         } else {
             LOG_ERR("No HID Report characteristics found");
-            state = STATE_IDLE;
+            /* Disconnect – don't set STATE_IDLE while connected,
+             * as that allows the scan handler to trigger a competing
+             * reconnection.  disconnected_cb will set STATE_IDLE. */
+            if (kbd_conn) {
+                bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+            }
         }
         return BT_GATT_ITER_STOP;
     }
@@ -659,7 +664,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v20: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX+DEBUG_KEY ***\n",
+    printk("*** DONGLE v20b: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX+DEBUG_KEY ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
