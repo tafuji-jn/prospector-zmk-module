@@ -941,6 +941,11 @@ static void test_psa_import(void)
 #if !IS_ENABLED(CONFIG_ZMK_BLE)
 static int dongle_bt_enable(void)
 {
+    /* Wait for USB serial (TerraTerm) to connect before proceeding,
+     * so early boot logs are visible for debugging. */
+    printk("*** DONGLE v28b: Waiting 5s for serial console... ***\n");
+    k_msleep(5000);
+
     int err = bt_enable(NULL);
     if (err) {
         printk("*** DONGLE: bt_enable failed: %d ***\n", err);
