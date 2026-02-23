@@ -740,7 +740,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v27: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
+    printk("*** DONGLE v28: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -947,11 +947,11 @@ static int dongle_bt_enable(void)
     printk("*** DONGLE: Settings loaded (bonds) ***\n");
 #endif
 
-    /* Clear all bonds to force fresh pairing.
-     * Previous failed pairing attempts left stale bonds on keyboard side.
-     * Without this, keyboard tries LTK re-encryption → PIN_OR_KEY_MISSING. */
-    err = bt_unpair(BT_ID_DEFAULT, NULL);
-    printk("*** DONGLE: Bonds cleared: %d ***\n", err);
+    /* Bonds are now persisted across reboots.  After the first successful
+     * LESC pairing both sides share matching bond data, so subsequent
+     * connections can re-encrypt without a full pairing exchange.
+     * If bonds become stale, flash settings_reset on the keyboard. */
+    printk("*** DONGLE: Bonds preserved (settings loaded) ***\n");
 
     return 0;
 }
