@@ -246,6 +246,12 @@ done:
 static uint16_t hid_svc_start;
 static uint16_t hid_svc_end;
 
+/* Static UUID storage for async GATT discovery (BT_UUID_DECLARE_16 creates
+ * stack-local compound literals that go out of scope before the callback
+ * fires, causing dangling pointer reads in the UUID filter). */
+static struct bt_uuid_16 disc_uuid_svc = BT_UUID_INIT_16(0x1812);  /* HID Service */
+static struct bt_uuid_16 disc_uuid_chr = BT_UUID_INIT_16(0x2A4D);  /* HID Report */
+
 /* Second discover_params for phase 1 (characteristic discovery) */
 static struct bt_gatt_discover_params disc_params2;
 
@@ -355,7 +361,7 @@ static uint8_t discover_svc_cb(struct bt_conn *conn,
 
     /* Phase 1: discover characteristics within HID service range */
     memset(&disc_params2, 0, sizeof(disc_params2));
-    disc_params2.uuid = BT_UUID_HID_REPORT;
+    disc_params2.uuid = &disc_uuid_chr.uuid;
     disc_params2.func = discover_chars_cb;
     disc_params2.start_handle = hid_svc_start + 1;
     disc_params2.end_handle = hid_svc_end;
@@ -386,7 +392,7 @@ static void start_hid_discovery(struct bt_conn *conn)
     printk("*** DONGLE: Starting HID service discovery ***\n");
 
     /* Phase 0: discover HID primary service (0x1812) to get handle range */
-    disc_params.uuid = BT_UUID_HID_SERVICE;
+    disc_params.uuid = &disc_uuid_svc.uuid;
     disc_params.func = discover_svc_cb;
     disc_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
     disc_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
@@ -740,7 +746,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v28: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
+    printk("*** DONGLE v28a: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
