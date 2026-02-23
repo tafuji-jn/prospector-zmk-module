@@ -664,7 +664,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v24: PSA_USE=%d PSA_NOUSE=%d P256M=%d F5+F6_DUMP ***\n",
+    printk("*** DONGLE v25: PSA_USE=%d PSA_NOUSE=%d P256M=%d F5+F6_DUMP ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -1019,11 +1019,8 @@ bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
 
     hex_format(hex_buf, &key[0], 32);
     printk("*** KEY_X: %s ***\n", hex_buf);
+    k_msleep(10);
 
-    hex_format(hex_buf, &key[32], 32);
-    printk("*** KEY_Y_ORIG: %s ***\n", hex_buf);
-
-    printk("*** KEY_VALID: FORCED TRUE ***\n");
     return true;
 }
 
@@ -1044,6 +1041,7 @@ static void dh_key_dump_cb(const uint8_t key[32])
     } else {
         printk("*** DHKEY_RESULT: NULL (ECDH failed) ***\n");
     }
+    k_msleep(10);
     saved_dh_key_cb(key);
 }
 
@@ -1054,7 +1052,6 @@ int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
      * but keeping static for safety. */
     static uint8_t fixed_pk[64];
     uint8_t x_be[32], y_be[32];
-    char hex_buf[65];
 
     memcpy(fixed_pk, remote_pk, 64);
 
@@ -1065,14 +1062,9 @@ int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
     if (compute_p256_y(x_be, y_be) == 0) {
         uint8_t y_fixed_le[32];
         memcpy_swap(y_fixed_le, y_be, 32);
-        hex_format(hex_buf, y_fixed_le, 32);
-        printk("*** KEY_Y_COMPUTED: %s ***\n", hex_buf);
 
         /* Replace Y in fixed_pk with the corrected Y */
         memcpy(&fixed_pk[32], y_fixed_le, 32);
-        printk("*** ECDH_MODE: Using CORRECTED Y ***\n");
-    } else {
-        printk("*** ECDH_MODE: Cannot compute Y, using original ***\n");
     }
 
     /* Intercept callback to dump DHKey */
@@ -1116,40 +1108,16 @@ int __wrap_bt_crypto_f5(const uint8_t *w, const uint8_t *n1,
 {
     char hex_buf[65];
 
-    printk("*** F5_INPUT_W (DHKey LE): ");
     hex_format(hex_buf, w, 32);
-    printk("%s ***\n", hex_buf);
-
-    printk("*** F5_INPUT_N1 (nonce1 LE): ");
-    hex_format(hex_buf, n1, 16);
-    printk("%s ***\n", hex_buf);
-
-    printk("*** F5_INPUT_N2 (nonce2 LE): ");
-    hex_format(hex_buf, n2, 16);
-    printk("%s ***\n", hex_buf);
-
-    /* bt_addr_le_t: 1 byte type + 6 bytes address */
-    printk("*** F5_INPUT_A1: type=%d addr=%02x:%02x:%02x:%02x:%02x:%02x ***\n",
-           a1->type,
-           a1->a.val[5], a1->a.val[4], a1->a.val[3],
-           a1->a.val[2], a1->a.val[1], a1->a.val[0]);
-
-    printk("*** F5_INPUT_A2: type=%d addr=%02x:%02x:%02x:%02x:%02x:%02x ***\n",
-           a2->type,
-           a2->a.val[5], a2->a.val[4], a2->a.val[3],
-           a2->a.val[2], a2->a.val[1], a2->a.val[0]);
+    printk("*** F5_W: %s ***\n", hex_buf);
+    k_msleep(10);
 
     int ret = __real_bt_crypto_f5(w, n1, n2, a1, a2, mackey, ltk);
 
-    printk("*** F5_OUTPUT_MACKEY: ");
     hex_format(hex_buf, mackey, 16);
-    printk("%s ***\n", hex_buf);
+    printk("*** F5_MACKEY: %s ***\n", hex_buf);
+    k_msleep(10);
 
-    printk("*** F5_OUTPUT_LTK: ");
-    hex_format(hex_buf, ltk, 16);
-    printk("%s ***\n", hex_buf);
-
-    printk("*** F5 returned: %d ***\n", ret);
     return ret;
 }
 
@@ -1176,29 +1144,24 @@ int __wrap_bt_crypto_f6(const uint8_t *w, const uint8_t *n1,
     char hex_buf[65];
 
     hex_format(hex_buf, w, 16);
-    printk("*** F6_W (MacKey): %s ***\n", hex_buf);
-
+    printk("*** F6_W: %s ***\n", hex_buf);
     hex_format(hex_buf, n1, 16);
     printk("*** F6_N1: %s ***\n", hex_buf);
-
     hex_format(hex_buf, n2, 16);
     printk("*** F6_N2: %s ***\n", hex_buf);
-
-    hex_format(hex_buf, r, 16);
-    printk("*** F6_R: %s ***\n", hex_buf);
+    k_msleep(10);
 
     printk("*** F6_IOCAP: %02x %02x %02x ***\n",
            iocap[0], iocap[1], iocap[2]);
-
     printk("*** F6_A1: type=%d addr=%02x:%02x:%02x:%02x:%02x:%02x ***\n",
            a1->type,
            a1->a.val[5], a1->a.val[4], a1->a.val[3],
            a1->a.val[2], a1->a.val[1], a1->a.val[0]);
-
     printk("*** F6_A2: type=%d addr=%02x:%02x:%02x:%02x:%02x:%02x ***\n",
            a2->type,
            a2->a.val[5], a2->a.val[4], a2->a.val[3],
            a2->a.val[2], a2->a.val[1], a2->a.val[0]);
+    k_msleep(10);
 
     int ret = __real_bt_crypto_f6(w, n1, n2, r, iocap, a1, a2, check);
 
