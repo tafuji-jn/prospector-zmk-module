@@ -664,7 +664,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v23: PSA_USE=%d PSA_NOUSE=%d P256M=%d F5_DUMP+ECDH_CMP ***\n",
+    printk("*** DONGLE v23b: PSA_USE=%d PSA_NOUSE=%d P256M=%d F5_DUMP+ECDH_CMP ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -897,6 +897,13 @@ SYS_INIT(dongle_bt_enable, APPLICATION, 50);
 #include <mbedtls/ecp.h>
 #include <mbedtls/bignum.h>
 
+/* RNG wrapper for mbedtls_ecp_mul (required in MbedTLS 3.x for blinding) */
+static int ecp_rng_wrapper(void *ctx, unsigned char *buf, size_t len)
+{
+    (void)ctx;
+    return (psa_generate_random(buf, len) == PSA_SUCCESS) ? 0 : -1;
+}
+
 /* Reverse-copy n bytes (byte-swap LE↔BE) */
 static void memcpy_swap(void *dst, const void *src, size_t n)
 {
@@ -1080,7 +1087,8 @@ int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
             };
 
             /* --- Method A: mbedtls_ecp_mul --- */
-            /* MbedTLS 3.x: use read/write_binary to avoid PRIVATE members */
+            /* MbedTLS 3.x: use read/write_binary to avoid PRIVATE members.
+             * MbedTLS 3.x requires f_rng for side-channel blinding. */
             mbedtls_ecp_group grp;
             mbedtls_ecp_point Q, R;
             mbedtls_mpi d_mpi;
@@ -1098,7 +1106,8 @@ int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
             int rc = mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1);
             if (rc == 0) rc = mbedtls_mpi_read_binary(&d_mpi, test_d_be, 32);
             if (rc == 0) rc = mbedtls_ecp_point_read_binary(&grp, &Q, q_buf, 65);
-            if (rc == 0) rc = mbedtls_ecp_mul(&grp, &R, &d_mpi, &Q, NULL, NULL);
+            if (rc == 0) rc = mbedtls_ecp_mul(&grp, &R, &d_mpi, &Q,
+                                               ecp_rng_wrapper, NULL);
 
             uint8_t ecp_dhkey_be[32];
             if (rc == 0) {
