@@ -157,12 +157,18 @@ int usb_hid_forwarder_init(void)
     }
 
     ret = usb_enable(usb_status_cb);
-    if (ret && ret != -EALREADY) {
+    if (ret == -EALREADY) {
+        /* USB was initialized at boot (CONFIG_USB_DEVICE_INITIALIZE_AT_BOOT).
+         * Our status callback was NOT registered, so assume USB is ready.
+         * The host has had time to enumerate during the boot delay. */
+        usb_ready = true;
+        printk("*** USB_HID: USB already enabled, assuming ready ***\n");
+    } else if (ret) {
         LOG_ERR("USB enable failed: %d", ret);
         return ret;
     }
 
-    LOG_INF("USB HID forwarder initialized");
+    printk("*** USB_HID: forwarder initialized (ready=%d) ***\n", usb_ready);
     return 0;
 }
 
