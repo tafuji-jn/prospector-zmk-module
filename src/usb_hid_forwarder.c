@@ -85,13 +85,13 @@ static const uint8_t hid_report_desc[] = {
 };
 
 static const struct device *hid_dev;
-static struct k_sem usb_sem;
 static bool usb_ready;
 
 /* Callback when USB HID interrupt endpoint write completes */
 static void int_in_ready_cb(const struct device *dev)
 {
-    k_sem_give(&usb_sem);
+    /* No flow control needed – just log for diagnostics */
+    LOG_DBG("USB HID EP write complete");
 }
 
 /* Callback when host sends LED output report (Caps Lock etc.) */
@@ -102,7 +102,6 @@ static int set_report_cb(const struct device *dev,
     /* Report ID 1, Output report = LED indicators */
     if (*len > 0) {
         LOG_DBG("LED output report: 0x%02x", (*data)[0]);
-        /* Could forward LED state back to keyboard via BLE if desired */
     }
     return 0;
 }
@@ -117,11 +116,11 @@ static void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param)
 {
     switch (status) {
     case USB_DC_CONFIGURED:
-        LOG_INF("USB HID configured");
+        printk("*** USB_HID: Host configured ***\n");
         usb_ready = true;
         break;
     case USB_DC_DISCONNECTED:
-        LOG_INF("USB HID disconnected");
+        printk("*** USB_HID: Disconnected ***\n");
         usb_ready = false;
         break;
     case USB_DC_SUSPEND:
@@ -138,8 +137,6 @@ static void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param)
 int usb_hid_forwarder_init(void)
 {
     int ret;
-
-    k_sem_init(&usb_sem, 1, 1);
 
     hid_dev = device_get_binding("HID_0");
     if (hid_dev == NULL) {
@@ -158,15 +155,13 @@ int usb_hid_forwarder_init(void)
 
     ret = usb_enable(usb_status_cb);
     if (ret == -EALREADY) {
-        /* USB was already enabled (e.g. by ZMK or another subsystem).
-         * Our status callback was NOT registered. Assume configured. */
         usb_ready = true;
         printk("*** USB_HID: USB already enabled, assuming ready ***\n");
     } else if (ret) {
         LOG_ERR("USB enable failed: %d", ret);
         return ret;
     } else {
-        printk("*** USB_HID: USB enabled, waiting for host configuration ***\n");
+        printk("*** USB_HID: USB enabled, waiting for host ***\n");
     }
 
     printk("*** USB_HID: forwarder initialized (ready=%d) ***\n", usb_ready);
@@ -179,20 +174,17 @@ int usb_hid_forwarder_send(const uint8_t *report, uint16_t len)
         return -ENODEV;
     }
 
-    /* Wait for previous write to complete (100ms timeout) */
-    if (k_sem_take(&usb_sem, K_MSEC(100)) != 0) {
-        LOG_WRN("USB HID write timeout");
-        return -ETIMEDOUT;
-    }
-
+    /* Fire-and-forget: write the report to the interrupt IN endpoint.
+     * No semaphore flow control – HID keyboard reports are small (≤9 bytes)
+     * and the USB host polls at 1-10ms intervals.  If a previous write is
+     * still pending, hid_int_ep_write returns an error which we log but
+     * don't treat as fatal (the next report will carry the latest state). */
     int ret = hid_int_ep_write(hid_dev, report, len, NULL);
     if (ret) {
-        LOG_ERR("USB HID write failed: %d", ret);
-        k_sem_give(&usb_sem);
-        return ret;
+        LOG_WRN("USB HID write: %d", ret);
     }
 
-    return 0;
+    return ret;
 }
 
 bool usb_hid_forwarder_is_ready(void)
