@@ -664,7 +664,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v21: PSA_USE=%d PSA_NOUSE=%d P256M=%d Y_FIX ***\n",
+    printk("*** DONGLE v22: PSA_USE=%d PSA_NOUSE=%d P256M=%d NO_Y_FIX ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -1054,16 +1054,43 @@ int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
     /* Convert X from LE (wire) to BE (math) */
     memcpy_swap(x_be, remote_pk, 32);
 
-    /* Compute valid Y on P-256 for this X */
+    /* v22: Compute Y for diagnostics but do NOT replace original Y.
+     * Test: use keyboard's original Y as-is (bypass validation only). */
     if (compute_p256_y(x_be, y_be) == 0) {
-        /* Convert Y from BE back to LE (wire format) */
-        memcpy_swap(&fixed_pk[32], y_be, 32);
+        char y_fixed_hex[65];
+        uint8_t y_fixed_le[32];
+        memcpy_swap(y_fixed_le, y_be, 32);
+        hex_format(y_fixed_hex, y_fixed_le, 32);
+        printk("*** KEY_Y_COMPUTED: %s ***\n", y_fixed_hex);
 
-        hex_format(hex_buf, &fixed_pk[32], 32);
-        printk("*** KEY_Y_FIXED: %s ***\n", hex_buf);
-        printk("*** ECDH_FIX: Y coordinate corrected ***\n");
+        /* Also show p - Y (the other root) */
+        {
+            static const uint8_t p256_p[] = {
+                0xFF,0xFF,0xFF,0xFF, 0x00,0x00,0x00,0x01,
+                0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+                0x00,0x00,0x00,0x00, 0xFF,0xFF,0xFF,0xFF,
+                0xFF,0xFF,0xFF,0xFF, 0xFF,0xFF,0xFF,0xFF
+            };
+            mbedtls_mpi Y_mpi, p_mpi, negY;
+            mbedtls_mpi_init(&Y_mpi);
+            mbedtls_mpi_init(&p_mpi);
+            mbedtls_mpi_init(&negY);
+            mbedtls_mpi_read_binary(&Y_mpi, y_be, 32);
+            mbedtls_mpi_read_binary(&p_mpi, p256_p, 32);
+            mbedtls_mpi_sub_mpi(&negY, &p_mpi, &Y_mpi);
+            uint8_t neg_y_be[32], neg_y_le[32];
+            mbedtls_mpi_write_binary(&negY, neg_y_be, 32);
+            memcpy_swap(neg_y_le, neg_y_be, 32);
+            char neg_hex[65];
+            hex_format(neg_hex, neg_y_le, 32);
+            printk("*** KEY_Y_NEG:      %s ***\n", neg_hex);
+            mbedtls_mpi_free(&Y_mpi);
+            mbedtls_mpi_free(&p_mpi);
+            mbedtls_mpi_free(&negY);
+        }
+        printk("*** ECDH_MODE: Using ORIGINAL Y (no correction) ***\n");
     } else {
-        printk("*** ECDH_FIX: Cannot compute Y, using original ***\n");
+        printk("*** ECDH_MODE: Cannot compute Y, using original ***\n");
     }
 
     /* v19: Dump the full key passed to real bt_dh_key_gen */
