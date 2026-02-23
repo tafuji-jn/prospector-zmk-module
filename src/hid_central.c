@@ -664,7 +664,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v23b: PSA_USE=%d PSA_NOUSE=%d P256M=%d F5_DUMP+ECDH_CMP ***\n",
+    printk("*** DONGLE v24: PSA_USE=%d PSA_NOUSE=%d P256M=%d F5+F6_DUMP ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
@@ -1061,132 +1061,19 @@ int __wrap_bt_dh_key_gen(const uint8_t remote_pk[64],
     /* Convert X from LE (wire) to BE (math) */
     memcpy_swap(x_be, remote_pk, 32);
 
-    /* v23: Compute Y and REPLACE original Y (same as v21).
-     * Also do independent ECDH comparison: PSA vs mbedtls_ecp_mul. */
+    /* Compute valid Y from X and replace original (corrupted) Y. */
     if (compute_p256_y(x_be, y_be) == 0) {
-        char y_fixed_hex[65];
         uint8_t y_fixed_le[32];
         memcpy_swap(y_fixed_le, y_be, 32);
-        hex_format(y_fixed_hex, y_fixed_le, 32);
-        printk("*** KEY_Y_COMPUTED: %s ***\n", y_fixed_hex);
+        hex_format(hex_buf, y_fixed_le, 32);
+        printk("*** KEY_Y_COMPUTED: %s ***\n", hex_buf);
 
         /* Replace Y in fixed_pk with the corrected Y */
         memcpy(&fixed_pk[32], y_fixed_le, 32);
         printk("*** ECDH_MODE: Using CORRECTED Y ***\n");
-
-        /* v23: Independent ECDH comparison using a known test private key.
-         * Compute d*Q with both PSA and mbedtls_ecp_mul to check if they
-         * produce the same result for this specific public key. */
-        {
-            /* Test private key (arbitrary nonzero < order n) */
-            static const uint8_t test_d_be[32] = {
-                0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-                0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x07
-            };
-
-            /* --- Method A: mbedtls_ecp_mul --- */
-            /* MbedTLS 3.x: use read/write_binary to avoid PRIVATE members.
-             * MbedTLS 3.x requires f_rng for side-channel blinding. */
-            mbedtls_ecp_group grp;
-            mbedtls_ecp_point Q, R;
-            mbedtls_mpi d_mpi;
-            mbedtls_ecp_group_init(&grp);
-            mbedtls_ecp_point_init(&Q);
-            mbedtls_ecp_point_init(&R);
-            mbedtls_mpi_init(&d_mpi);
-
-            /* Load Q from uncompressed point: 0x04 || X_BE || Y_BE */
-            uint8_t q_buf[65];
-            q_buf[0] = 0x04;
-            memcpy(&q_buf[1], x_be, 32);
-            memcpy(&q_buf[33], y_be, 32);
-
-            int rc = mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1);
-            if (rc == 0) rc = mbedtls_mpi_read_binary(&d_mpi, test_d_be, 32);
-            if (rc == 0) rc = mbedtls_ecp_point_read_binary(&grp, &Q, q_buf, 65);
-            if (rc == 0) rc = mbedtls_ecp_mul(&grp, &R, &d_mpi, &Q,
-                                               ecp_rng_wrapper, NULL);
-
-            uint8_t ecp_dhkey_be[32];
-            if (rc == 0) {
-                /* Write R as uncompressed: 0x04 || RX_BE || RY_BE */
-                uint8_t r_buf[65];
-                size_t olen;
-                rc = mbedtls_ecp_point_write_binary(&grp, &R,
-                        MBEDTLS_ECP_PF_UNCOMPRESSED, &olen, r_buf, 65);
-                if (rc == 0 && olen >= 33) {
-                    memcpy(ecp_dhkey_be, &r_buf[1], 32); /* X coordinate */
-                    char ecp_hex[65];
-                    uint8_t ecp_le[32];
-                    memcpy_swap(ecp_le, ecp_dhkey_be, 32);
-                    hex_format(ecp_hex, ecp_le, 32);
-                    printk("*** ECDH_TEST_ECP:  %s ***\n", ecp_hex);
-                } else {
-                    printk("*** ECDH_TEST_ECP:  write_binary failed rc=%d ***\n", rc);
-                }
-            } else {
-                printk("*** ECDH_TEST_ECP:  FAILED rc=%d ***\n", rc);
-            }
-
-            mbedtls_ecp_group_free(&grp);
-            mbedtls_ecp_point_free(&Q);
-            mbedtls_ecp_point_free(&R);
-            mbedtls_mpi_free(&d_mpi);
-
-            /* --- Method B: PSA psa_raw_key_agreement --- */
-            psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
-            psa_key_id_t key_id;
-            psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
-            psa_set_key_bits(&attr, 256);
-            psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
-            psa_set_key_algorithm(&attr, PSA_ALG_ECDH);
-
-            psa_status_t st = psa_import_key(&attr, test_d_be, 32, &key_id);
-            if (st == PSA_SUCCESS) {
-                /* PSA needs uncompressed point: 0x04 || X_BE || Y_BE */
-                uint8_t pub_buf[65];
-                pub_buf[0] = 0x04;
-                memcpy(&pub_buf[1], x_be, 32);
-                memcpy(&pub_buf[33], y_be, 32);
-
-                uint8_t psa_dhkey_be[32];
-                size_t dhkey_len;
-                st = psa_raw_key_agreement(PSA_ALG_ECDH, key_id,
-                                           pub_buf, 65,
-                                           psa_dhkey_be, 32, &dhkey_len);
-                if (st == PSA_SUCCESS) {
-                    char psa_hex[65];
-                    uint8_t psa_le[32];
-                    memcpy_swap(psa_le, psa_dhkey_be, 32);
-                    hex_format(psa_hex, psa_le, 32);
-                    printk("*** ECDH_TEST_PSA:  %s ***\n", psa_hex);
-
-                    /* Compare */
-                    if (rc == 0 && memcmp(ecp_dhkey_be, psa_dhkey_be, 32) == 0) {
-                        printk("*** ECDH_TEST: MATCH (PSA == ECP) ***\n");
-                    } else {
-                        printk("*** ECDH_TEST: MISMATCH! PSA != ECP ***\n");
-                    }
-                } else {
-                    printk("*** ECDH_TEST_PSA:  FAILED st=%d ***\n", (int)st);
-                }
-                psa_destroy_key(key_id);
-            } else {
-                printk("*** ECDH_TEST_PSA:  import failed st=%d ***\n", (int)st);
-            }
-            psa_reset_key_attributes(&attr);
-        }
     } else {
         printk("*** ECDH_MODE: Cannot compute Y, using original ***\n");
     }
-
-    /* v19: Dump the full key passed to real bt_dh_key_gen */
-    hex_format(hex_buf, fixed_pk, 32);
-    printk("*** ECDH_INPUT_X: %s ***\n", hex_buf);
-    hex_format(hex_buf, &fixed_pk[32], 32);
-    printk("*** ECDH_INPUT_Y: %s ***\n", hex_buf);
 
     /* Intercept callback to dump DHKey */
     saved_dh_key_cb = cb;
@@ -1263,5 +1150,60 @@ int __wrap_bt_crypto_f5(const uint8_t *w, const uint8_t *n1,
     printk("%s ***\n", hex_buf);
 
     printk("*** F5 returned: %d ***\n", ret);
+    return ret;
+}
+
+/* ------------------------------------------------------------------ */
+/* v24: Wrap bt_crypto_f6 to dump DHKey Check computation              */
+/* This is the value the keyboard uses to verify our pairing.          */
+/* f6(MacKey, N1, N2, R, IOcap, A1, A2) -> Check (16 bytes)           */
+/* ------------------------------------------------------------------ */
+
+extern int __real_bt_crypto_f6(const uint8_t *w, const uint8_t *n1,
+                                const uint8_t *n2, const uint8_t *r,
+                                const uint8_t *iocap,
+                                const bt_addr_le_t *a1,
+                                const bt_addr_le_t *a2,
+                                uint8_t *check);
+
+int __wrap_bt_crypto_f6(const uint8_t *w, const uint8_t *n1,
+                         const uint8_t *n2, const uint8_t *r,
+                         const uint8_t *iocap,
+                         const bt_addr_le_t *a1,
+                         const bt_addr_le_t *a2,
+                         uint8_t *check)
+{
+    char hex_buf[65];
+
+    hex_format(hex_buf, w, 16);
+    printk("*** F6_W (MacKey): %s ***\n", hex_buf);
+
+    hex_format(hex_buf, n1, 16);
+    printk("*** F6_N1: %s ***\n", hex_buf);
+
+    hex_format(hex_buf, n2, 16);
+    printk("*** F6_N2: %s ***\n", hex_buf);
+
+    hex_format(hex_buf, r, 16);
+    printk("*** F6_R: %s ***\n", hex_buf);
+
+    printk("*** F6_IOCAP: %02x %02x %02x ***\n",
+           iocap[0], iocap[1], iocap[2]);
+
+    printk("*** F6_A1: type=%d addr=%02x:%02x:%02x:%02x:%02x:%02x ***\n",
+           a1->type,
+           a1->a.val[5], a1->a.val[4], a1->a.val[3],
+           a1->a.val[2], a1->a.val[1], a1->a.val[0]);
+
+    printk("*** F6_A2: type=%d addr=%02x:%02x:%02x:%02x:%02x:%02x ***\n",
+           a2->type,
+           a2->a.val[5], a2->a.val[4], a2->a.val[3],
+           a2->a.val[2], a2->a.val[1], a2->a.val[0]);
+
+    int ret = __real_bt_crypto_f6(w, n1, n2, r, iocap, a1, a2, check);
+
+    hex_format(hex_buf, check, 16);
+    printk("*** F6_CHECK: %s (ret=%d) ***\n", hex_buf, ret);
+
     return ret;
 }
