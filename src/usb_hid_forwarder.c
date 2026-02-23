@@ -174,12 +174,19 @@ int usb_hid_forwarder_send(const uint8_t *report, uint16_t len)
         return -ENODEV;
     }
 
-    /* Fire-and-forget: write the report to the interrupt IN endpoint.
-     * No semaphore flow control – HID keyboard reports are small (≤9 bytes)
-     * and the USB host polls at 1-10ms intervals.  If a previous write is
-     * still pending, hid_int_ep_write returns an error which we log but
-     * don't treat as fatal (the next report will carry the latest state). */
+    /* Write report to interrupt IN endpoint.  If the endpoint is still
+     * busy from a previous write (-EAGAIN), retry after a short delay.
+     * At USB Full Speed a 9-byte report transmits in <0.1ms, so 1ms
+     * is ample.  Key release reports MUST be delivered to avoid stuck keys. */
     int ret = hid_int_ep_write(hid_dev, report, len, NULL);
+    if (ret == -EAGAIN) {
+        k_msleep(1);
+        ret = hid_int_ep_write(hid_dev, report, len, NULL);
+        if (ret == -EAGAIN) {
+            k_msleep(2);
+            ret = hid_int_ep_write(hid_dev, report, len, NULL);
+        }
+    }
     if (ret) {
         LOG_WRN("USB HID write: %d", ret);
     }
