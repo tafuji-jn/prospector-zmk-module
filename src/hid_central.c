@@ -181,7 +181,8 @@ static uint8_t hid_notify_cb(struct bt_conn *conn,
         }
     }
 
-    LOG_DBG("HID notify: id=%d len=%d", report_id, length);
+    printk("*** HID_IN: id=%d len=%d handle=0x%04x ***\n",
+           report_id, length, params->value_handle);
     forward_hid_report(report_id, data, length);
     return BT_GATT_ITER_CONTINUE;
 }
@@ -197,7 +198,7 @@ static uint8_t report_ref_read_cb(struct bt_conn *conn, uint8_t err,
                                    const void *data, uint16_t length)
 {
     if (err || !data || length < 2) {
-        LOG_WRN("Report Reference read failed (err %d, len %d)", err, length);
+        printk("*** REF_READ: FAILED (err %d, len %d) ***\n", err, length);
         goto done;
     }
 
@@ -213,8 +214,8 @@ static uint8_t report_ref_read_cb(struct bt_conn *conn, uint8_t err,
             desc_handle <= reports[i].handle + 3) {
             reports[i].report_id   = report_id;
             reports[i].report_type = report_type;
-            LOG_INF("Report handle 0x%04x -> id=%d type=%d",
-                    reports[i].handle, report_id, report_type);
+            printk("*** REF: handle=0x%04x id=%d type=%d ***\n",
+                   reports[i].handle, report_id, report_type);
             break;
         }
     }
@@ -222,8 +223,13 @@ static uint8_t report_ref_read_cb(struct bt_conn *conn, uint8_t err,
 done:
     pending_ref_reads--;
     if (pending_ref_reads <= 0) {
-        /* All Report References read – subscribe to Input Reports */
-        LOG_INF("All report references read, subscribing to input reports");
+        /* All Report References read – print summary */
+        printk("*** DONGLE: Report summary (%d total): ***\n", report_count);
+        for (int i = 0; i < report_count; i++) {
+            printk("***   [%d] handle=0x%04x id=%d type=%d ***\n",
+                   i, reports[i].handle, reports[i].report_id,
+                   reports[i].report_type);
+        }
         state = STATE_SUBSCRIBING;
         subscribe_next_input_report(0);
     }
@@ -762,7 +768,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v28c: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
+    printk("*** DONGLE v29: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
