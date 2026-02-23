@@ -158,14 +158,15 @@ int usb_hid_forwarder_init(void)
 
     ret = usb_enable(usb_status_cb);
     if (ret == -EALREADY) {
-        /* USB was initialized at boot (CONFIG_USB_DEVICE_INITIALIZE_AT_BOOT).
-         * Our status callback was NOT registered, so assume USB is ready.
-         * The host has had time to enumerate during the boot delay. */
+        /* USB was already enabled (e.g. by ZMK or another subsystem).
+         * Our status callback was NOT registered. Assume configured. */
         usb_ready = true;
         printk("*** USB_HID: USB already enabled, assuming ready ***\n");
     } else if (ret) {
         LOG_ERR("USB enable failed: %d", ret);
         return ret;
+    } else {
+        printk("*** USB_HID: USB enabled, waiting for host configuration ***\n");
     }
 
     printk("*** USB_HID: forwarder initialized (ready=%d) ***\n", usb_ready);
@@ -204,4 +205,7 @@ static int usb_hid_forwarder_sys_init(void)
     return usb_hid_forwarder_init();
 }
 
-SYS_INIT(usb_hid_forwarder_sys_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+/* Priority 20: must run BEFORE dongle_bt_enable (50) which has a 5s delay,
+ * and before CONFIG_USB_DEVICE_INITIALIZE_AT_BOOT would enable USB.
+ * HID interface must be registered before usb_enable() is called. */
+SYS_INIT(usb_hid_forwarder_sys_init, APPLICATION, 20);
