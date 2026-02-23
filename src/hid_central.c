@@ -124,6 +124,7 @@ static void test_psa_import(void);
  *
  * Report ID 1 = Keyboard (8 bytes: modifiers + reserved + 6 keys)
  * Report ID 2 = Consumer Control (2 bytes: usage code LE)
+ * Report ID 3 = Mouse/Pointing (9 bytes: buttons + X/Y/scrollV/scrollH)
  */
 static void forward_hid_report(uint8_t report_id, const uint8_t *data,
                                 uint16_t len)
@@ -145,15 +146,13 @@ static void forward_hid_report(uint8_t report_id, const uint8_t *data,
         buf[0] = 0x02;
         memcpy(&buf[1], data, 2);
         usb_hid_forwarder_send(buf, 3);
+    } else if (report_id == 3 && len == 9) {
+        /* Mouse/pointing report */
+        buf[0] = 0x03;
+        memcpy(&buf[1], data, 9);
+        usb_hid_forwarder_send(buf, 10);
     } else {
-        /* Best-effort: try keyboard report for 8-byte payloads */
-        if (len == 8) {
-            buf[0] = 0x01;
-            memcpy(&buf[1], data, 8);
-            usb_hid_forwarder_send(buf, 9);
-        } else {
-            LOG_WRN("Unknown report id=%d len=%d, dropped", report_id, len);
-        }
+        LOG_WRN("Unknown report id=%d len=%d, dropped", report_id, len);
     }
 }
 
