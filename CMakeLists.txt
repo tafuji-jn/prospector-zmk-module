@@ -27,6 +27,7 @@ if(CONFIG_PROSPECTOR_DONGLE_MODE)
                 -Wl,--wrap=bt_pub_key_is_valid
                 -Wl,--wrap=bt_dh_key_gen
                 -Wl,--wrap=mbedtls_ecp_check_pubkey
+                -Wl,--wrap=bt_crypto_f5
         )
 endif()
 
