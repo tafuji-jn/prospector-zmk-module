@@ -413,6 +413,15 @@ static void start_hid_discovery(struct bt_conn *conn)
 static void subscribe_cb(struct bt_conn *conn, uint8_t err,
                           struct bt_gatt_subscribe_params *params)
 {
+    /* Ignore spurious subscribe callbacks from Zephyr's automatic CCC
+     * restoration on bonded reconnection.  We only process subscribe
+     * results when our state machine is actively subscribing. */
+    if (state != STATE_SUBSCRIBING) {
+        LOG_DBG("Ignoring subscribe cb in state %d (handle 0x%04x)",
+                state, params->value_handle);
+        return;
+    }
+
     if (err) {
         LOG_WRN("Subscribe failed for handle 0x%04x: %d",
                 params->value_handle, err);
@@ -561,7 +570,14 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 
 static void discovery_work_handler(struct k_work *work)
 {
-    if (!kbd_conn || state != STATE_CONNECTING) {
+    if (!kbd_conn) {
+        return;
+    }
+    /* Allow discovery in any connected state – on bonded reconnection,
+     * Zephyr's auto CCC restore may have already changed state to
+     * STATE_READY before this delayed work fires. */
+    if (state == STATE_DISCOVERING) {
+        LOG_DBG("Discovery already running, skipping");
         return;
     }
     printk("*** DONGLE: Starting HID discovery (deferred) ***\n");
@@ -746,7 +762,7 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v28a: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
+    printk("*** DONGLE v28c: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
            psa_test_result, psa_test_nousage,
            IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
 
