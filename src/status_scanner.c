@@ -454,7 +454,7 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
             if (ad_type == BT_DATA_NAME_SHORTENED && strncmp(device_name, "LalaPad", 7) == 0) {
                 // This looks like a truncated "LalaPadmini" - use the full name
                 strcpy(device_name, "LalaPadmini");
-                printk("*** PROSPECTOR SCANNER: Expanded shortened name to: %s ***\n", device_name);
+                LOG_DBG("Expanded shortened name to: %s", device_name);
             }
             
             store_device_name(addr, device_name);
@@ -508,8 +508,8 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
                         LOG_DBG("Valid Prospector data: Ch:%d->%d Ver=%d Bat=%d%%",
                                keyboard_channel, scanner_channel, data->version, data->battery_level);
                     } else {
-                        printk("*** SCANNER: Channel mismatch - KB Ch:%d, Scanner Ch:%d (filtered) ***\n",
-                               keyboard_channel, scanner_channel);
+                        LOG_DBG("Channel mismatch: KB Ch:%d, Scanner Ch:%d",
+                                keyboard_channel, scanner_channel);
                     }
                 } else {
                     // Silently ignore non-Prospector devices to reduce log spam

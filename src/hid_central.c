@@ -180,8 +180,8 @@ static uint8_t hid_notify_cb(struct bt_conn *conn,
         }
     }
 
-    printk("*** HID_IN: id=%d len=%d handle=0x%04x ***\n",
-           report_id, length, params->value_handle);
+    LOG_DBG("HID_IN: id=%d len=%d handle=0x%04x", report_id, length,
+            params->value_handle);
     forward_hid_report(report_id, data, length);
     return BT_GATT_ITER_CONTINUE;
 }
@@ -197,7 +197,7 @@ static uint8_t report_ref_read_cb(struct bt_conn *conn, uint8_t err,
                                    const void *data, uint16_t length)
 {
     if (err || !data || length < 2) {
-        printk("*** REF_READ: FAILED (err %d, len %d) ***\n", err, length);
+        LOG_WRN("REF_READ failed (err %d, len %d)", err, length);
         goto done;
     }
 
@@ -213,8 +213,8 @@ static uint8_t report_ref_read_cb(struct bt_conn *conn, uint8_t err,
             desc_handle <= reports[i].handle + 3) {
             reports[i].report_id   = report_id;
             reports[i].report_type = report_type;
-            printk("*** REF: handle=0x%04x id=%d type=%d ***\n",
-                   reports[i].handle, report_id, report_type);
+            LOG_INF("REF: handle=0x%04x id=%d type=%d",
+                    reports[i].handle, report_id, report_type);
             break;
         }
     }
@@ -222,13 +222,8 @@ static uint8_t report_ref_read_cb(struct bt_conn *conn, uint8_t err,
 done:
     pending_ref_reads--;
     if (pending_ref_reads <= 0) {
-        /* All Report References read – print summary */
-        printk("*** DONGLE: Report summary (%d total): ***\n", report_count);
-        for (int i = 0; i < report_count; i++) {
-            printk("***   [%d] handle=0x%04x id=%d type=%d ***\n",
-                   i, reports[i].handle, reports[i].report_id,
-                   reports[i].report_type);
-        }
+        /* All Report References read */
+        printk("*** DONGLE: %d reports discovered ***\n", report_count);
         state = STATE_SUBSCRIBING;
         subscribe_next_input_report(0);
     }
@@ -306,16 +301,11 @@ static uint8_t discover_chars_cb(struct bt_conn *conn,
                                   struct bt_gatt_discover_params *params)
 {
     if (!attr) {
-        printk("*** DONGLE: Char discovery done, found %d reports ***\n",
-               report_count);
-        LOG_INF("HID char discovery complete, found %d reports", report_count);
+        LOG_INF("HID char discovery: found %d reports", report_count);
         if (report_count > 0) {
             read_report_references(conn);
         } else {
-            LOG_ERR("No HID Report characteristics found in service 0x%04x-0x%04x",
-                    hid_svc_start, hid_svc_end);
-            printk("*** DONGLE: No HID Report chars in range 0x%04x-0x%04x ***\n",
-                   hid_svc_start, hid_svc_end);
+            printk("*** DONGLE: No HID Report chars found ***\n");
             if (kbd_conn) {
                 bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
             }
@@ -331,10 +321,7 @@ static uint8_t discover_chars_cb(struct bt_conn *conn,
         reports[report_count].report_id = 0;
         reports[report_count].report_type = 0;
         reports[report_count].subscribed = false;
-        printk("*** DONGLE: Found Report char at 0x%04x (#%d) ***\n",
-               chrc->value_handle, report_count);
-        LOG_INF("Found HID Report char at handle 0x%04x (#%d)",
-                chrc->value_handle, report_count);
+        LOG_INF("Report char at 0x%04x (#%d)", chrc->value_handle, report_count);
         report_count++;
     }
 
@@ -347,8 +334,7 @@ static uint8_t discover_svc_cb(struct bt_conn *conn,
                                 struct bt_gatt_discover_params *params)
 {
     if (!attr) {
-        printk("*** DONGLE: HID Service NOT found! ***\n");
-        LOG_ERR("HID Service (0x1812) not found on peer");
+        printk("*** DONGLE: HID Service NOT found ***\n");
         if (kbd_conn) {
             bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
         }
@@ -359,10 +345,8 @@ static uint8_t discover_svc_cb(struct bt_conn *conn,
     hid_svc_start = attr->handle;
     hid_svc_end = svc->end_handle;
 
-    printk("*** DONGLE: HID Service found at 0x%04x-0x%04x ***\n",
+    printk("*** DONGLE: HID Service 0x%04x-0x%04x ***\n",
            hid_svc_start, hid_svc_end);
-    LOG_INF("HID Service found: handles 0x%04x-0x%04x",
-            hid_svc_start, hid_svc_end);
 
     /* Phase 1: discover characteristics within HID service range */
     memset(&disc_params2, 0, sizeof(disc_params2));
@@ -374,8 +358,7 @@ static uint8_t discover_svc_cb(struct bt_conn *conn,
 
     int err = bt_gatt_discover(conn, &disc_params2);
     if (err) {
-        printk("*** DONGLE: Char discovery start failed: %d ***\n", err);
-        LOG_ERR("Characteristic discovery failed: %d", err);
+        LOG_ERR("Char discovery failed: %d", err);
         if (kbd_conn) {
             bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
         }
@@ -394,8 +377,6 @@ static void start_hid_discovery(struct bt_conn *conn)
 
     state = STATE_DISCOVERING;
 
-    printk("*** DONGLE: Starting HID service discovery ***\n");
-
     /* Phase 0: discover HID primary service (0x1812) to get handle range */
     disc_params.uuid = &disc_uuid_svc.uuid;
     disc_params.func = discover_svc_cb;
@@ -405,7 +386,6 @@ static void start_hid_discovery(struct bt_conn *conn)
 
     int err = bt_gatt_discover(conn, &disc_params);
     if (err) {
-        printk("*** DONGLE: HID service discovery start failed: %d ***\n", err);
         LOG_ERR("HID GATT discovery start failed: %d", err);
         state = STATE_IDLE;
     }
@@ -488,7 +468,6 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     }
 
     if (err) {
-        printk("*** DONGLE: Connection failed: %d ***\n", err);
         LOG_ERR("Connection failed: %d", err);
         bt_conn_unref(kbd_conn);
         kbd_conn = NULL;
@@ -500,28 +479,6 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr_str, sizeof(addr_str));
     printk("*** DONGLE: Connected to %s ***\n", addr_str);
-    LOG_INF("Connected to %s", addr_str);
-
-    /* v19b: Dump our own BLE address and public key for DHKey verification.
-     * Use bt_id_get instead of bt_le_oob_get_local (which can interfere
-     * with SMP state during connected_cb). */
-    {
-        bt_addr_le_t addrs[1];
-        size_t count = 1;
-        bt_id_get(addrs, &count);
-        if (count > 0) {
-            bt_addr_le_to_str(&addrs[0], addr_str, sizeof(addr_str));
-            printk("*** DONGLE: Our addr: %s ***\n", addr_str);
-        }
-        const uint8_t *our_pk = bt_pub_key_get();
-        if (our_pk) {
-            char hbuf[65];
-            hex_format(hbuf, our_pk, 32);
-            printk("*** OUR_PK_X: %s ***\n", hbuf);
-            hex_format(hbuf, our_pk + 32, 32);
-            printk("*** OUR_PK_Y: %s ***\n", hbuf);
-        }
-    }
 
     state = STATE_CONNECTING;
 
@@ -530,12 +487,11 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     discover_after_security = true;
     int sec_err = bt_conn_set_security(conn, BT_SECURITY_L2);
     if (sec_err) {
-        printk("*** DONGLE: Security request failed: %d, trying discovery anyway ***\n", sec_err);
         LOG_WRN("Security request failed: %d", sec_err);
         discover_after_security = false;
         start_hid_discovery(conn);
     } else {
-        printk("*** DONGLE: Security requested, waiting for pairing ***\n");
+        LOG_INF("Security requested");
     }
 
     /* Do NOT restart scanning here – passive scan during LESC pairing
@@ -549,8 +505,7 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
         return;
     }
 
-    printk("*** DONGLE: Disconnected (reason 0x%02x) ***\n", reason);
-    LOG_INF("Disconnected (reason 0x%02x)", reason);
+    printk("*** DONGLE: Disconnected (0x%02x) ***\n", reason);
 
     /* Cancel any pending deferred discovery */
     k_work_cancel_delayable(&discovery_work);
@@ -585,7 +540,6 @@ static void discovery_work_handler(struct k_work *work)
         LOG_DBG("Discovery already running, skipping");
         return;
     }
-    printk("*** DONGLE: Starting HID discovery (deferred) ***\n");
     start_hid_discovery(kbd_conn);
 }
 
@@ -605,25 +559,18 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
     }
 
     if (err) {
-        printk("*** DONGLE: Security failed: level %d err %d ***\n", level, err);
+        printk("*** DONGLE: Security failed: err %d ***\n", err);
         LOG_WRN("Security change failed: level %d err %d", level, err);
-        /* Try discovery anyway – some devices allow unencrypted HID access */
         if (discover_after_security) {
             discover_after_security = false;
             start_hid_discovery(conn);
         }
     } else {
-        printk("*** DONGLE: Security level %d established ***\n", level);
-        LOG_INF("Security level %d established", level);
-        /* Store bonded address for reconnection */
+        printk("*** DONGLE: Security level %d ***\n", level);
         bt_addr_le_copy(&bonded_addr, bt_conn_get_dst(conn));
         has_bonded_addr = true;
-
-        /* If we were waiting to discover, defer slightly to let
-         * the link settle after encryption establishment. */
         if (discover_after_security) {
             discover_after_security = false;
-            printk("*** DONGLE: Scheduling HID discovery in 500ms ***\n");
             k_work_schedule(&discovery_work, K_MSEC(500));
         }
     }
@@ -705,35 +652,26 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
         if (bt_addr_le_cmp(addr, &bonded_addr) != 0) {
             return; /* Not our bonded keyboard */
         }
-        printk("*** DONGLE: Bonded addr matched, connecting ***\n");
+        LOG_INF("Bonded addr matched");
     } else {
 #ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
         const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
         if (target[0] != '\0') {
-            /* Target name is set – REQUIRE name match.
-             * Don't connect based on HID service UUID alone,
-             * otherwise we'd grab random BLE HID mice/keyboards. */
             if (!name_matches_target(name)) {
                 return;
             }
-            printk("*** DONGLE: Name '%s' matched target '%s' ***\n",
-                   name ? name : "(null)", target);
         } else
 #endif
         {
-            /* No target name – accept any device with HID service */
             if (!is_hid_service_in_ad(buf)) {
                 return;
             }
-            printk("*** DONGLE: HID service found, connecting ***\n");
         }
     }
 
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
-    printk("*** DONGLE: Target found: %s (RSSI %d, type 0x%02x) ***\n",
-           addr_str, rssi, type);
-    LOG_INF("Found target keyboard: %s (RSSI %d)", addr_str, rssi);
+    printk("*** DONGLE: Target found: %s ***\n", addr_str);
 
     /* Defer connection to work queue – bt_conn_le_create must NOT be
      * called from within the scan callback (BLE RX thread context). */
@@ -749,12 +687,9 @@ static void run_psa_diagnostic(void)
         return;
     }
     psa_diag_done = true;
-
-    printk("*** PSA_DIAG: start ***\n");
-    printk("*** PSA_DIAG: ECC_PUB=%d BT_ECC=%d ***\n",
-           IS_ENABLED(CONFIG_PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY),
-           IS_ENABLED(CONFIG_BT_ECC));
-    printk("*** PSA_DIAG: done ***\n");
+    LOG_DBG("PSA diag: ECC_PUB=%d BT_ECC=%d",
+            IS_ENABLED(CONFIG_PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY),
+            IS_ENABLED(CONFIG_BT_ECC));
 }
 
 static void connect_work_handler(struct k_work *work)
@@ -767,10 +702,6 @@ static void connect_work_handler(struct k_work *work)
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&pending_addr, addr_str, sizeof(addr_str));
 
-    printk("*** DONGLE v29: PSA_USE=%d PSA_NOUSE=%d P256M=%d ***\n",
-           psa_test_result, psa_test_nousage,
-           IS_ENABLED(CONFIG_MBEDTLS_PSA_P256M_DRIVER_ENABLED));
-
     /* One-time PSA import test with known-valid key */
     if (!psa_diag_done) {
         psa_diag_done = true;
@@ -782,7 +713,7 @@ static void connect_work_handler(struct k_work *work)
      * with unknown SMP state can cause LESC pairing failures. */
     struct bt_conn *existing = bt_conn_lookup_addr_le(BT_ID_DEFAULT, &pending_addr);
     if (existing) {
-        printk("*** DONGLE v6: Existing conn found to %s, disconnecting first ***\n", addr_str);
+        LOG_WRN("Existing conn to %s, disconnecting", addr_str);
         bt_conn_disconnect(existing, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
         bt_conn_unref(existing);
         /* Wait a bit for disconnect to complete, then retry */
@@ -794,7 +725,6 @@ static void connect_work_handler(struct k_work *work)
     /* Stop scanning before connecting (Zephyr requirement) */
     int err = bt_le_scan_stop();
     if (err) {
-        printk("*** DONGLE: Scan stop failed: %d ***\n", err);
         LOG_WRN("Scan stop failed: %d", err);
     }
 
@@ -815,17 +745,14 @@ static void connect_work_handler(struct k_work *work)
         6, 6, 0, 400   /* 7.5ms interval, no latency, 4s timeout */
     );
 
-    printk("*** DONGLE: Calling bt_conn_le_create for %s ***\n", addr_str);
+    printk("*** DONGLE: Connecting to %s ***\n", addr_str);
     err = bt_conn_le_create(&pending_addr, &create_param, &conn_param, &kbd_conn);
     if (err) {
-        printk("*** DONGLE: bt_conn_le_create failed: %d ***\n", err);
+        printk("*** DONGLE: Connect failed: %d ***\n", err);
         LOG_ERR("Create connection failed: %d", err);
         state = STATE_IDLE;
-        /* Restart scanning */
         status_scanner_restart_scanning();
         schedule_reconnect();
-    } else {
-        printk("*** DONGLE: Connection initiated to %s ***\n", addr_str);
     }
 }
 
@@ -872,8 +799,7 @@ static void reconnect_work_handler(struct k_work *work)
     int err = bt_conn_le_create(&bonded_addr, &create_param,
                                  &conn_param, &kbd_conn);
     if (err) {
-        printk("*** DONGLE: Reconnect failed: %d ***\n", err);
-        LOG_WRN("Reconnect create failed: %d, will retry", err);
+        LOG_WRN("Reconnect failed: %d", err);
         state = STATE_IDLE;
         status_scanner_restart_scanning();
         schedule_reconnect();
@@ -899,12 +825,8 @@ static int hid_central_init(void)
 
     state = STATE_SCANNING;
 #ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
-    printk("*** DONGLE: HID Central initialized, target='%s' ***\n",
-           CONFIG_PROSPECTOR_DONGLE_TARGET_NAME);
-#else
-    printk("*** DONGLE: HID Central initialized, target='(any)' ***\n");
+    printk("*** DONGLE: target='%s' ***\n", CONFIG_PROSPECTOR_DONGLE_TARGET_NAME);
 #endif
-    LOG_INF("HID Central initialized, waiting for scan results");
     return 0;
 }
 
@@ -962,28 +884,20 @@ static void test_psa_import(void)
 #if !IS_ENABLED(CONFIG_ZMK_BLE)
 static int dongle_bt_enable(void)
 {
-    /* Wait for USB serial (TerraTerm) to connect before proceeding,
-     * so early boot logs are visible for debugging. */
-    printk("*** DONGLE v28b: Waiting 5s for serial console... ***\n");
-    k_msleep(5000);
+    /* Short delay for serial console connection */
+    printk("*** DONGLE v31: Booting... ***\n");
+    k_msleep(2000);
 
     int err = bt_enable(NULL);
     if (err) {
         printk("*** DONGLE: bt_enable failed: %d ***\n", err);
         return err;
     }
-    printk("*** DONGLE: BT stack initialized (ZMK_BLE disabled) ***\n");
+    printk("*** DONGLE: BT ready ***\n");
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     settings_load();
-    printk("*** DONGLE: Settings loaded (bonds) ***\n");
 #endif
-
-    /* Bonds are now persisted across reboots.  After the first successful
-     * LESC pairing both sides share matching bond data, so subsequent
-     * connections can re-encrypt without a full pairing exchange.
-     * If bonds become stale, flash settings_reset on the keyboard. */
-    printk("*** DONGLE: Bonds preserved (settings loaded) ***\n");
 
     return 0;
 }
@@ -1102,7 +1016,7 @@ static int compute_p256_y(const uint8_t x_be[32], uint8_t y_be[32])
     mbedtls_mpi_mul_mpi(&tmp, &Y, &Y);
     mbedtls_mpi_mod_mpi(&tmp, &tmp, &p_mpi);
     if (mbedtls_mpi_cmp_mpi(&tmp, &z) != 0) {
-        printk("*** Y_FIX: No valid Y for this X ***\n");
+        LOG_WRN("Y_FIX: No valid Y for this X");
         goto cleanup;
     }
 
@@ -1124,12 +1038,7 @@ extern bool __real_bt_pub_key_is_valid(const uint8_t key[64]);
 
 bool __wrap_bt_pub_key_is_valid(const uint8_t key[64])
 {
-    char hex_buf[65];
-
-    hex_format(hex_buf, &key[0], 32);
-    printk("*** KEY_X: %s ***\n", hex_buf);
-    k_msleep(10);
-
+    LOG_DBG("bt_pub_key_is_valid: bypassed");
     return true;
 }
 
@@ -1143,14 +1052,9 @@ static void (*saved_dh_key_cb)(const uint8_t key[32]);
 
 static void dh_key_dump_cb(const uint8_t key[32])
 {
-    if (key) {
-        char hex_buf[65];
-        hex_format(hex_buf, key, 32);
-        printk("*** DHKEY_RESULT: %s ***\n", hex_buf);
-    } else {
-        printk("*** DHKEY_RESULT: NULL (ECDH failed) ***\n");
+    if (!key) {
+        LOG_WRN("ECDH failed: NULL DHKey");
     }
-    k_msleep(10);
     saved_dh_key_cb(key);
 }
 
@@ -1191,7 +1095,7 @@ int __wrap_mbedtls_ecp_check_pubkey(const mbedtls_ecp_group *grp,
 {
     int real_result = __real_mbedtls_ecp_check_pubkey(grp, pt);
     if (real_result != 0) {
-        printk("*** ECP_CHECK: BYPASSED (real=%d) ***\n", real_result);
+        LOG_DBG("ECP check bypassed (real=%d)", real_result);
     }
     return 0;
 }
@@ -1215,19 +1119,8 @@ int __wrap_bt_crypto_f5(const uint8_t *w, const uint8_t *n1,
                          const bt_addr_le_t *a2,
                          uint8_t *mackey, uint8_t *ltk)
 {
-    char hex_buf[65];
-
-    hex_format(hex_buf, w, 32);
-    printk("*** F5_W: %s ***\n", hex_buf);
-    k_msleep(10);
-
-    int ret = __real_bt_crypto_f5(w, n1, n2, a1, a2, mackey, ltk);
-
-    hex_format(hex_buf, mackey, 16);
-    printk("*** F5_MACKEY: %s ***\n", hex_buf);
-    k_msleep(10);
-
-    return ret;
+    LOG_DBG("f5 called");
+    return __real_bt_crypto_f5(w, n1, n2, a1, a2, mackey, ltk);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1250,32 +1143,6 @@ int __wrap_bt_crypto_f6(const uint8_t *w, const uint8_t *n1,
                          const bt_addr_le_t *a2,
                          uint8_t *check)
 {
-    char hex_buf[65];
-
-    hex_format(hex_buf, w, 16);
-    printk("*** F6_W: %s ***\n", hex_buf);
-    hex_format(hex_buf, n1, 16);
-    printk("*** F6_N1: %s ***\n", hex_buf);
-    hex_format(hex_buf, n2, 16);
-    printk("*** F6_N2: %s ***\n", hex_buf);
-    k_msleep(10);
-
-    printk("*** F6_IOCAP: %02x %02x %02x ***\n",
-           iocap[0], iocap[1], iocap[2]);
-    printk("*** F6_A1: type=%d addr=%02x:%02x:%02x:%02x:%02x:%02x ***\n",
-           a1->type,
-           a1->a.val[5], a1->a.val[4], a1->a.val[3],
-           a1->a.val[2], a1->a.val[1], a1->a.val[0]);
-    printk("*** F6_A2: type=%d addr=%02x:%02x:%02x:%02x:%02x:%02x ***\n",
-           a2->type,
-           a2->a.val[5], a2->a.val[4], a2->a.val[3],
-           a2->a.val[2], a2->a.val[1], a2->a.val[0]);
-    k_msleep(10);
-
-    int ret = __real_bt_crypto_f6(w, n1, n2, r, iocap, a1, a2, check);
-
-    hex_format(hex_buf, check, 16);
-    printk("*** F6_CHECK: %s (ret=%d) ***\n", hex_buf, ret);
-
-    return ret;
+    LOG_DBG("f6 called");
+    return __real_bt_crypto_f6(w, n1, n2, r, iocap, a1, a2, check);
 }
