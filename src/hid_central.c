@@ -926,11 +926,27 @@ static void test_psa_import(void)
     psa_reset_key_attributes(&attr);
 }
 
+/* Callback for bt_foreach_bond: restore bonded keyboard address */
+static void bond_found_cb(const struct bt_bond_info *info, void *user_data)
+{
+    /* Use the first bond found as our keyboard address.
+     * This restores has_bonded_addr across reboots so we connect
+     * by address (not name), avoiding the wrong split half. */
+    if (!has_bonded_addr) {
+        bt_addr_le_copy(&bonded_addr, &info->addr);
+        has_bonded_addr = true;
+
+        char addr_str[BT_ADDR_LE_STR_LEN];
+        bt_addr_le_to_str(&bonded_addr, addr_str, sizeof(addr_str));
+        printk("*** DONGLE: Restored bond: %s ***\n", addr_str);
+    }
+}
+
 #if !IS_ENABLED(CONFIG_ZMK_BLE)
 static int dongle_bt_enable(void)
 {
     /* Short delay for serial console connection */
-    printk("*** DONGLE v31: Booting... ***\n");
+    printk("*** DONGLE v34: Booting... ***\n");
     k_msleep(2000);
 
     int err = bt_enable(NULL);
@@ -942,6 +958,10 @@ static int dongle_bt_enable(void)
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     settings_load();
+    /* Restore bonded keyboard address from NVS so we connect by address,
+     * not by name.  Without this, has_bonded_addr is always false at boot
+     * and name-matching ("lotom") could connect to the wrong split half. */
+    bt_foreach_bond(BT_ID_DEFAULT, bond_found_cb, NULL);
 #endif
 
     return 0;
