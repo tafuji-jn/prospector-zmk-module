@@ -14,6 +14,7 @@ __attribute__((weak)) bool display_settings_is_interacting(void) {
 }
 
 #include <zephyr/kernel.h>
+#include <zephyr/init.h>
 #include <zephyr/device.h>
 #include <zephyr/input/input.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>  // INPUT_KEY_DOWN, etc.
@@ -101,7 +102,7 @@ extern void touch_handler_late_register_callback(touch_event_callback_t callback
 
 static void touch_input_callback(struct input_event *evt, void *user_data) {
     ARG_UNUSED(user_data);
-    LOG_INF("📥 INPUT EVENT: type=%d code=%d value=%d", evt->type, evt->code, evt->value);
+    printk("TOUCH: code=%d val=%d\n", evt->code, evt->value);
 
     switch (evt->code) {
         case INPUT_KEY_DOWN:
@@ -282,17 +283,20 @@ int touch_handler_init(void) {
     const struct device *touch_dev = DEVICE_DT_GET(TOUCH_NODE);
 
     if (!device_is_ready(touch_dev)) {
-        LOG_ERR("Touch sensor device not ready");
+        printk("*** TOUCH: CST816S NOT READY ***\n");
         return -ENODEV;
     }
 
-    LOG_INF("Touch handler initialized: CST816S on I2C");
-    LOG_INF("Touch panel size: 240x280 (Waveshare 1.69\" Round LCD)");
-    LOG_INF("✅ Using ZMK event system for thread-safe LVGL operations");
-    LOG_INF("⚠️ LVGL indev will be registered later by scanner_display.c");
-
+    printk("*** TOUCH: CST816S ready on I2C ***\n");
     return 0;
 }
+
+/* Auto-run at boot to check touch hardware status */
+static int touch_boot_check(void)
+{
+    return touch_handler_init();
+}
+SYS_INIT(touch_boot_check, APPLICATION, 90);
 
 int touch_handler_register_lvgl_indev(void) {
     if (lvgl_indev) {
