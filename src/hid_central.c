@@ -113,47 +113,93 @@ static void schedule_reconnect(void);
 static void test_psa_import(void);
 
 /* ------------------------------------------------------------------ */
-/* USB HID report forwarding                                          */
+/* USB HID report forwarding (deferred via work queue)                */
 /* ------------------------------------------------------------------ */
 
 /*
- * Map BLE HID report to the USB forwarder.
+ * HID reports are received in the BT RX thread (notification callback).
+ * USB writes (hid_int_ep_write) must NOT block that thread – doing so
+ * stalls all BLE processing and eventually freezes the system when the
+ * trackball generates continuous notifications.
  *
- * The BLE report is raw (no Report ID prefix).  Our USB descriptor uses
- * Report IDs, so we prepend the appropriate ID.
+ * Solution: copy the report into a small ring buffer and submit a work
+ * item.  The system work queue drains the buffer and writes to USB.
+ */
+
+#define HID_QUEUE_SIZE 8   /* power of 2 for mask trick */
+#define HID_REPORT_MAX 12  /* Report-ID (1) + max payload (10 for mouse) */
+
+struct hid_queued_report {
+    uint8_t data[HID_REPORT_MAX];
+    uint8_t len;
+};
+
+static struct hid_queued_report hid_queue[HID_QUEUE_SIZE];
+static volatile uint8_t hid_q_head; /* written by BT RX thread */
+static volatile uint8_t hid_q_tail; /* read by work queue */
+static struct k_work hid_send_work;
+
+static void hid_send_work_handler(struct k_work *work)
+{
+    while (hid_q_tail != hid_q_head) {
+        uint8_t idx = hid_q_tail & (HID_QUEUE_SIZE - 1);
+        struct hid_queued_report *rpt = &hid_queue[idx];
+
+        if (usb_hid_forwarder_is_ready()) {
+            usb_hid_forwarder_send(rpt->data, rpt->len);
+        }
+
+        hid_q_tail++;
+    }
+}
+
+/*
+ * Map BLE HID report to the USB forwarder (queued).
  *
- * Report ID 1 = Keyboard (8 bytes: modifiers + reserved + 6 keys)
- * Report ID 2 = Consumer Control (2 bytes: usage code LE)
- * Report ID 3 = Mouse/Pointing (9 bytes: buttons + X/Y/scrollV/scrollH)
+ * Report ID 1 = Keyboard (8 bytes)
+ * Report ID 2 = Consumer Control (2 bytes)
+ * Report ID 3 = Mouse/Pointing (9 bytes)
  */
 static void forward_hid_report(uint8_t report_id, const uint8_t *data,
                                 uint16_t len)
 {
-    if (!usb_hid_forwarder_is_ready()) {
-        LOG_DBG("USB not ready, dropping report");
-        return;
-    }
-
-    uint8_t buf[16]; /* enough for Report-ID + max report */
+    uint8_t buf[HID_REPORT_MAX];
+    uint8_t buf_len = 0;
 
     if (report_id == 1 && len == 8) {
-        /* Keyboard report */
         buf[0] = 0x01;
         memcpy(&buf[1], data, 8);
-        usb_hid_forwarder_send(buf, 9);
+        buf_len = 9;
     } else if (report_id == 2 && len >= 2) {
-        /* Consumer control report */
         buf[0] = 0x02;
         memcpy(&buf[1], data, 2);
-        usb_hid_forwarder_send(buf, 3);
+        buf_len = 3;
     } else if (report_id == 3 && len == 9) {
-        /* Mouse/pointing report */
         buf[0] = 0x03;
         memcpy(&buf[1], data, 9);
-        usb_hid_forwarder_send(buf, 10);
+        buf_len = 10;
     } else {
-        LOG_WRN("Unknown report id=%d len=%d, dropped", report_id, len);
+        return; /* unknown report, silently drop */
     }
+
+    /* Enqueue – if the ring buffer is full, drop the oldest mouse report
+     * or drop this report for mouse.  Keyboard reports are never dropped. */
+    uint8_t next = (hid_q_head + 1);
+    if ((next - hid_q_tail) > HID_QUEUE_SIZE) {
+        /* Queue full */
+        if (report_id == 3) {
+            return; /* drop mouse – relative delta, no harm */
+        }
+        /* For keyboard: advance tail to make room (drop oldest) */
+        hid_q_tail++;
+    }
+
+    uint8_t idx = hid_q_head & (HID_QUEUE_SIZE - 1);
+    memcpy(hid_queue[idx].data, buf, buf_len);
+    hid_queue[idx].len = buf_len;
+    hid_q_head++;
+
+    k_work_submit(&hid_send_work);
 }
 
 /* ------------------------------------------------------------------ */
@@ -180,8 +226,6 @@ static uint8_t hid_notify_cb(struct bt_conn *conn,
         }
     }
 
-    LOG_DBG("HID_IN: id=%d len=%d handle=0x%04x", report_id, length,
-            params->value_handle);
     forward_hid_report(report_id, data, length);
     return BT_GATT_ITER_CONTINUE;
 }
@@ -822,6 +866,7 @@ static int hid_central_init(void)
     k_work_init_delayable(&reconnect_work, reconnect_work_handler);
     k_work_init_delayable(&discovery_work, discovery_work_handler);
     k_work_init(&connect_work, connect_work_handler);
+    k_work_init(&hid_send_work, hid_send_work_handler);
 
     state = STATE_SCANNING;
 #ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME

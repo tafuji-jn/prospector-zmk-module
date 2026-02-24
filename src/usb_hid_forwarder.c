@@ -221,23 +221,18 @@ int usb_hid_forwarder_send(const uint8_t *report, uint16_t len)
         return -ENODEV;
     }
 
+    /* Called from system work queue (not BT RX thread), so short
+     * sleeps on EAGAIN are safe and won't stall BLE processing. */
     int ret = hid_int_ep_write(hid_dev, report, len, NULL);
     if (ret == -EAGAIN) {
-        /* Mouse reports (ID 3) are relative deltas – dropping one just
-         * loses a tiny bit of movement, so never block the BT RX thread.
-         * Keyboard/consumer reports need guaranteed delivery to avoid
-         * stuck keys, so retry with short sleeps. */
-        if (len > 0 && report[0] == 0x03) {
-            return -EAGAIN; /* drop mouse report */
-        }
         k_msleep(1);
         ret = hid_int_ep_write(hid_dev, report, len, NULL);
         if (ret == -EAGAIN) {
-            k_msleep(2);
+            k_msleep(1);
             ret = hid_int_ep_write(hid_dev, report, len, NULL);
         }
     }
-    if (ret && ret != -EAGAIN) {
+    if (ret) {
         LOG_WRN("USB HID write: %d", ret);
     }
 
