@@ -14,7 +14,6 @@ __attribute__((weak)) bool display_settings_is_interacting(void) {
 }
 
 #include <zephyr/kernel.h>
-#include <zephyr/init.h>
 #include <zephyr/device.h>
 #include <zephyr/input/input.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>  // INPUT_KEY_DOWN, etc.
@@ -102,8 +101,6 @@ extern void touch_handler_late_register_callback(touch_event_callback_t callback
 
 static void touch_input_callback(struct input_event *evt, void *user_data) {
     ARG_UNUSED(user_data);
-    printk("TOUCH: code=%d val=%d\n", evt->code, evt->value);
-
     switch (evt->code) {
         case INPUT_KEY_DOWN:
             // CST816S hardware gesture: Swipe DOWN detected
@@ -283,66 +280,13 @@ int touch_handler_init(void) {
     const struct device *touch_dev = DEVICE_DT_GET(TOUCH_NODE);
 
     if (!device_is_ready(touch_dev)) {
-        printk("*** TOUCH: CST816S NOT READY ***\n");
+        LOG_ERR("CST816S touch sensor not ready");
         return -ENODEV;
     }
 
-    printk("*** TOUCH: CST816S ready on I2C ***\n");
+    LOG_INF("CST816S touch sensor ready");
     return 0;
 }
-
-/* Auto-run at boot to check touch hardware status */
-static int touch_boot_check(void)
-{
-    return touch_handler_init();
-}
-SYS_INIT(touch_boot_check, APPLICATION, 90);
-
-/* Diagnostic: poll CST816S registers via I2C to check if touch data exists */
-#include <zephyr/drivers/i2c.h>
-
-#define CST816S_I2C_ADDR 0x15
-#define TOUCH_I2C_NODE   DT_PARENT(TOUCH_NODE)
-
-static void touch_poll_diagnostic(struct k_work *work)
-{
-    const struct device *i2c_dev = DEVICE_DT_GET(TOUCH_I2C_NODE);
-    if (!device_is_ready(i2c_dev)) {
-        printk("*** TOUCH DIAG: I2C bus NOT READY ***\n");
-        return;
-    }
-
-    const struct device *touch_dev = DEVICE_DT_GET(TOUCH_NODE);
-    printk("*** TOUCH STATUS: CST816S %s ***\n",
-           device_is_ready(touch_dev) ? "READY" : "NOT READY");
-
-    /* Poll touch registers 5 times over 10 seconds - touch the panel during this time! */
-    for (int i = 0; i < 5; i++) {
-        uint8_t buf[7];
-        int ret = i2c_burst_read(i2c_dev, CST816S_I2C_ADDR, 0x00, buf, sizeof(buf));
-        if (ret) {
-            printk("*** TOUCH POLL %d: I2C read FAILED (%d) ***\n", i, ret);
-        } else {
-            /* buf[0]=WorkMode, buf[1]=GestureID, buf[2]=FingerNum,
-             * buf[3]=XposH, buf[4]=XposL, buf[5]=YposH, buf[6]=YposL */
-            uint16_t x = ((buf[3] & 0x0F) << 8) | buf[4];
-            uint16_t y = ((buf[5] & 0x0F) << 8) | buf[6];
-            printk("*** TOUCH POLL %d: fingers=%d gesture=0x%02x x=%d y=%d (raw: %02x %02x %02x %02x %02x %02x %02x) ***\n",
-                   i, buf[2], buf[1], x, y,
-                   buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6]);
-        }
-        k_msleep(2000);
-    }
-    printk("*** TOUCH DIAG: polling done ***\n");
-}
-static K_WORK_DELAYABLE_DEFINE(touch_status_work, touch_poll_diagnostic);
-
-static int touch_schedule_status(void)
-{
-    k_work_schedule(&touch_status_work, K_SECONDS(5));
-    return 0;
-}
-SYS_INIT(touch_schedule_status, APPLICATION, 91);
 
 int touch_handler_register_lvgl_indev(void) {
     if (lvgl_indev) {

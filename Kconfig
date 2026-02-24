@@ -184,6 +184,7 @@ config PROSPECTOR_TOUCH_ENABLED
     depends on PROSPECTOR_MODE_SCANNER
     select INPUT
     select INPUT_CST816S
+    select INPUT_CST816S_INTERRUPT
     help
       Enable touch panel support for swipe gestures and settings screens.
       When disabled, the scanner displays status only without user interaction.
