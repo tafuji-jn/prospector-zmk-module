@@ -185,7 +185,6 @@ config PROSPECTOR_TOUCH_ENABLED
     select INPUT
     select INPUT_CST816S
     select INPUT_CST816S_INTERRUPT
-    select ZMK_POINTING
     help
       Enable touch panel support for swipe gestures and settings screens.
       When disabled, the scanner displays status only without user interaction.
@@ -193,6 +192,8 @@ config PROSPECTOR_TOUCH_ENABLED
       Non-touch version shows: main status display with signal strength widget.
 
       This automatically enables INPUT, INPUT_CST816S drivers when selected.
+      Note: ZMK_POINTING is NOT needed - touch handler uses raw INPUT events
+      for LVGL, not ZMK's pointing device subsystem.
 
 config PROSPECTOR_MULTI_KEYBOARD
     bool "Support multiple keyboards"
