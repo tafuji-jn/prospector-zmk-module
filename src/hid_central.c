@@ -569,6 +569,9 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
         usb_hid_forwarder_send(release_kb, sizeof(release_kb));
     }
 
+    /* Restart scanning now that the connection is gone */
+    status_scanner_restart_scanning();
+
     schedule_reconnect();
 }
 
@@ -594,13 +597,10 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
         return;
     }
 
-    /* Restart scanning now that pairing is done (success or fail).
-     * We delayed this from connected_cb to avoid RF interference
-     * during LESC key exchange. */
-    int scan_err = status_scanner_restart_scanning();
-    if (scan_err) {
-        LOG_WRN("Failed to restart scanning after security: %d", scan_err);
-    }
+    /* Do NOT restart scanning while connected in dongle mode.
+     * Scan callbacks run in BT RX thread and compete with HID
+     * notifications – this causes freezes with high-rate trackball
+     * data.  Scanning restarts in disconnected_cb. */
 
     if (err) {
         printk("*** DONGLE: Security failed: err %d ***\n", err);
