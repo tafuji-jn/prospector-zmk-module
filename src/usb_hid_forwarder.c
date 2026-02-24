@@ -221,12 +221,15 @@ int usb_hid_forwarder_send(const uint8_t *report, uint16_t len)
         return -ENODEV;
     }
 
-    /* Write report to interrupt IN endpoint.  If the endpoint is still
-     * busy from a previous write (-EAGAIN), retry after a short delay.
-     * At USB Full Speed a 9-byte report transmits in <0.1ms, so 1ms
-     * is ample.  Key release reports MUST be delivered to avoid stuck keys. */
     int ret = hid_int_ep_write(hid_dev, report, len, NULL);
     if (ret == -EAGAIN) {
+        /* Mouse reports (ID 3) are relative deltas – dropping one just
+         * loses a tiny bit of movement, so never block the BT RX thread.
+         * Keyboard/consumer reports need guaranteed delivery to avoid
+         * stuck keys, so retry with short sleeps. */
+        if (len > 0 && report[0] == 0x03) {
+            return -EAGAIN; /* drop mouse report */
+        }
         k_msleep(1);
         ret = hid_int_ep_write(hid_dev, report, len, NULL);
         if (ret == -EAGAIN) {
@@ -234,7 +237,7 @@ int usb_hid_forwarder_send(const uint8_t *report, uint16_t len)
             ret = hid_int_ep_write(hid_dev, report, len, NULL);
         }
     }
-    if (ret) {
+    if (ret && ret != -EAGAIN) {
         LOG_WRN("USB HID write: %d", ret);
     }
 
