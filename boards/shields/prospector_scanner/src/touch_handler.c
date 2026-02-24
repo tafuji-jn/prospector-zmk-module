@@ -298,6 +298,22 @@ static int touch_boot_check(void)
 }
 SYS_INIT(touch_boot_check, APPLICATION, 90);
 
+/* Delayed status print - visible after USB serial connects */
+static void touch_delayed_status(struct k_work *work)
+{
+    const struct device *touch_dev = DEVICE_DT_GET(TOUCH_NODE);
+    printk("*** TOUCH STATUS: CST816S %s ***\n",
+           device_is_ready(touch_dev) ? "READY" : "NOT READY");
+}
+static K_WORK_DELAYABLE_DEFINE(touch_status_work, touch_delayed_status);
+
+static int touch_schedule_status(void)
+{
+    k_work_schedule(&touch_status_work, K_SECONDS(5));
+    return 0;
+}
+SYS_INIT(touch_schedule_status, APPLICATION, 91);
+
 int touch_handler_register_lvgl_indev(void) {
     if (lvgl_indev) {
         LOG_WRN("LVGL input device already registered");
