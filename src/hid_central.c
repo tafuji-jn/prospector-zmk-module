@@ -146,7 +146,12 @@ static void hid_send_work_handler(struct k_work *work)
         struct hid_queued_report *rpt = &hid_queue[idx];
 
         if (usb_hid_forwarder_is_ready()) {
-            usb_hid_forwarder_send(rpt->data, rpt->len);
+            int ret = usb_hid_forwarder_send(rpt->data, rpt->len);
+            if (rpt->data[0] == 0x03) {
+                LOG_INF("USB_SEND: mouse len=%d ret=%d", rpt->len, ret);
+            }
+        } else {
+            LOG_WRN("USB_SEND: not ready, dropping id=0x%02x", rpt->data[0]);
         }
 
         hid_q_tail++;
