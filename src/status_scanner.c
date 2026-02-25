@@ -24,6 +24,26 @@
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
+/* ------------------------------------------------------------------ */
+/* Scan callback ring buffer – offload heavy parsing to work queue    */
+/* ------------------------------------------------------------------ */
+
+#define SCAN_QUEUE_SIZE 16   /* power of 2 */
+#define SCAN_AD_MAX     31   /* BLE 4.x max advertisement data */
+
+struct scan_queued_ad {
+    bt_addr_le_t addr;
+    int8_t  rssi;
+    uint8_t type;
+    uint8_t ad_len;
+    uint8_t ad_data[SCAN_AD_MAX];
+};
+
+static struct scan_queued_ad scan_queue[SCAN_QUEUE_SIZE];
+static volatile uint8_t scan_q_head;
+static volatile uint8_t scan_q_tail;
+static struct k_work scan_process_work;
+
 // External function to trigger high-priority display update (defined in scanner_display.c)
 // Uses weak reference so it compiles even if scanner_display.c is not in the build
 __attribute__((weak)) void scanner_trigger_high_priority_update(void) {
@@ -402,8 +422,9 @@ static const char* get_device_name(const bt_addr_le_t *addr) {
     return "Unknown";
 }
 
-static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
-                         struct net_buf_simple *buf) {
+/* Heavy processing – runs in system work queue, NOT BT RX thread */
+static void scan_process_entry(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
+                               struct net_buf_simple *buf) {
     static int scan_count = 0;
     scan_count++;
     
@@ -562,6 +583,50 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 #endif
 }
 
+/* ------------------------------------------------------------------ */
+/* Work handler: drain scan ring buffer                               */
+/* ------------------------------------------------------------------ */
+
+static void scan_process_work_handler(struct k_work *work) {
+    while (scan_q_tail != scan_q_head) {
+        uint8_t idx = scan_q_tail & (SCAN_QUEUE_SIZE - 1);
+        struct scan_queued_ad *entry = &scan_queue[idx];
+
+        struct net_buf_simple buf;
+        net_buf_simple_init_with_data(&buf, entry->ad_data, entry->ad_len);
+        buf.len = entry->ad_len;
+
+        scan_process_entry(&entry->addr, entry->rssi, entry->type, &buf);
+
+        scan_q_tail++;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Lightweight scan callback – runs in BT RX thread                   */
+/* Only copies data into ring buffer and submits work.                */
+/* ------------------------------------------------------------------ */
+
+static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
+                          struct net_buf_simple *buf) {
+    /* Ring buffer full → drop (Scanner display gap is acceptable) */
+    if ((uint8_t)(scan_q_head - scan_q_tail) >= SCAN_QUEUE_SIZE) {
+        return;
+    }
+
+    uint8_t idx = scan_q_head & (SCAN_QUEUE_SIZE - 1);
+    struct scan_queued_ad *entry = &scan_queue[idx];
+
+    bt_addr_le_copy(&entry->addr, addr);
+    entry->rssi = rssi;
+    entry->type = type;
+    entry->ad_len = MIN(buf->len, SCAN_AD_MAX);
+    memcpy(entry->ad_data, buf->data, entry->ad_len);
+
+    scan_q_head++;
+    k_work_submit(&scan_process_work);
+}
+
 static void timeout_work_handler(struct k_work *work) {
     // Skip if timeout is disabled (0)
     if (KEYBOARD_TIMEOUT_MS == 0) {
@@ -631,6 +696,7 @@ int zmk_status_scanner_init(void) {
 
     memset(keyboards, 0, sizeof(keyboards));
     k_work_init_delayable(&timeout_work, timeout_work_handler);
+    k_work_init(&scan_process_work, scan_process_work_handler);
 
     LOG_INF("Status scanner initialized with mutex protection");
     return 0;
