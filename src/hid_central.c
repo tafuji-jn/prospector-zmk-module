@@ -498,6 +498,11 @@ static void subscribe_next_input_report(int idx)
     /* All input reports subscribed – we're ready */
     state = STATE_READY;
     LOG_INF("DONGLE: READY - forwarding HID reports to USB");
+
+    /* Restart scanning for Scanner display updates.
+     * Must be AFTER GATT discovery + subscribe completes – scanning
+     * during discovery saturates the BT RX thread and blocks GATT. */
+    status_scanner_restart_scanning();
 }
 
 /* ------------------------------------------------------------------ */
@@ -612,10 +617,6 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
             k_work_schedule(&discovery_work, K_MSEC(500));
         }
 
-        /* Restart scanning now that security is established.
-         * Safe because HID notifications use ringbuf+work queue (v33)
-         * and scan callbacks only use deferred logging (v34). */
-        status_scanner_restart_scanning();
     }
 }
 
@@ -936,7 +937,7 @@ static void bond_found_cb(const struct bt_bond_info *info, void *user_data)
 
         char addr_str[BT_ADDR_LE_STR_LEN];
         bt_addr_le_to_str(&bonded_addr, addr_str, sizeof(addr_str));
-        LOG_INF("DONGLE: Restored bond: %s", addr_str);
+        printk("*** DONGLE: Restored bond: %s ***\n", addr_str);
     }
 }
 
@@ -945,10 +946,10 @@ static int dongle_bt_enable(void)
 {
     int err = bt_enable(NULL);
     if (err) {
-        LOG_ERR("DONGLE: bt_enable failed: %d", err);
+        printk("*** DONGLE: bt_enable failed: %d ***\n", err);
         return err;
     }
-    LOG_INF("DONGLE: BT ready");
+    printk("*** DONGLE: BT ready ***\n");
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     settings_load();
