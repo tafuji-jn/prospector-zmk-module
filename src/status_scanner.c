@@ -706,9 +706,6 @@ int zmk_status_scanner_init(void) {
     memset(keyboards, 0, sizeof(keyboards));
     k_work_init_delayable(&timeout_work, timeout_work_handler);
     k_work_init(&scan_process_work, scan_process_work_handler);
-#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-    k_work_init_delayable(&scan_burst_work, scan_burst_work_handler);
-#endif
 
     LOG_INF("Status scanner initialized with mutex protection");
     return 0;
@@ -876,6 +873,11 @@ int status_scanner_start_coex_scanning(void) {
      * Continuous scanning (even at low duty) freezes HID notifications
      * on this BLE controller.  Brief bursts give the radio scheduler
      * clear periods for connection events. */
+    static bool burst_init_done;
+    if (!burst_init_done) {
+        k_work_init_delayable(&scan_burst_work, scan_burst_work_handler);
+        burst_init_done = true;
+    }
     scan_burst_stop();
     scan_burst_running = true;
     /* First burst after a short delay to let connection settle */
