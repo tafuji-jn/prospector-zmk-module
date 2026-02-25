@@ -148,7 +148,10 @@ static void hid_send_work_handler(struct k_work *work)
         if (usb_hid_forwarder_is_ready()) {
             int ret = usb_hid_forwarder_send(rpt->data, rpt->len);
             if (rpt->data[0] == 0x03) {
-                LOG_INF("USB_SEND: mouse len=%d ret=%d", rpt->len, ret);
+                int16_t x = (int16_t)(rpt->data[2] | (rpt->data[3] << 8));
+                int16_t y = (int16_t)(rpt->data[4] | (rpt->data[5] << 8));
+                LOG_INF("USB_MOUSE: ret=%d btn=0x%02x x=%d y=%d",
+                        ret, rpt->data[1], x, y);
             }
         } else {
             LOG_WRN("USB_SEND: not ready, dropping id=0x%02x", rpt->data[0]);
