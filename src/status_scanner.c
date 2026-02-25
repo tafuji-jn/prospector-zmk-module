@@ -588,17 +588,26 @@ static void scan_process_entry(const bt_addr_le_t *addr, int8_t rssi, uint8_t ty
 /* ------------------------------------------------------------------ */
 
 static void scan_process_work_handler(struct k_work *work) {
-    while (scan_q_tail != scan_q_head) {
-        uint8_t idx = scan_q_tail & (SCAN_QUEUE_SIZE - 1);
-        struct scan_queued_ad *entry = &scan_queue[idx];
+    /* Process ONE entry per invocation so that higher-priority work items
+     * (e.g. hid_send_work for trackball) can run between scan entries. */
+    if (scan_q_tail == scan_q_head) {
+        return;
+    }
 
-        struct net_buf_simple buf;
-        net_buf_simple_init_with_data(&buf, entry->ad_data, entry->ad_len);
-        buf.len = entry->ad_len;
+    uint8_t idx = scan_q_tail & (SCAN_QUEUE_SIZE - 1);
+    struct scan_queued_ad *entry = &scan_queue[idx];
 
-        scan_process_entry(&entry->addr, entry->rssi, entry->type, &buf);
+    struct net_buf_simple buf;
+    net_buf_simple_init_with_data(&buf, entry->ad_data, entry->ad_len);
+    buf.len = entry->ad_len;
 
-        scan_q_tail++;
+    scan_process_entry(&entry->addr, entry->rssi, entry->type, &buf);
+
+    scan_q_tail++;
+
+    /* Re-submit if more entries remain – yields to other pending work */
+    if (scan_q_tail != scan_q_head) {
+        k_work_submit(&scan_process_work);
     }
 }
 
