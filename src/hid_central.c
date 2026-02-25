@@ -267,7 +267,7 @@ done:
     pending_ref_reads--;
     if (pending_ref_reads <= 0) {
         /* All Report References read */
-        printk("*** DONGLE: %d reports discovered ***\n", report_count);
+        LOG_INF("DONGLE: %d reports discovered", report_count);
         state = STATE_SUBSCRIBING;
         subscribe_next_input_report(0);
     }
@@ -349,7 +349,7 @@ static uint8_t discover_chars_cb(struct bt_conn *conn,
         if (report_count > 0) {
             read_report_references(conn);
         } else {
-            printk("*** DONGLE: No HID Report chars found ***\n");
+            LOG_WRN("DONGLE: No HID Report chars found");
             if (kbd_conn) {
                 bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
             }
@@ -378,7 +378,7 @@ static uint8_t discover_svc_cb(struct bt_conn *conn,
                                 struct bt_gatt_discover_params *params)
 {
     if (!attr) {
-        printk("*** DONGLE: HID Service NOT found ***\n");
+        LOG_WRN("DONGLE: HID Service NOT found");
         if (kbd_conn) {
             bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
         }
@@ -389,8 +389,8 @@ static uint8_t discover_svc_cb(struct bt_conn *conn,
     hid_svc_start = attr->handle;
     hid_svc_end = svc->end_handle;
 
-    printk("*** DONGLE: HID Service 0x%04x-0x%04x ***\n",
-           hid_svc_start, hid_svc_end);
+    LOG_INF("DONGLE: HID Service 0x%04x-0x%04x",
+            hid_svc_start, hid_svc_end);
 
     /* Phase 1: discover characteristics within HID service range */
     memset(&disc_params2, 0, sizeof(disc_params2));
@@ -497,8 +497,7 @@ static void subscribe_next_input_report(int idx)
 
     /* All input reports subscribed – we're ready */
     state = STATE_READY;
-    printk("*** DONGLE: READY - forwarding HID reports to USB ***\n");
-    LOG_INF("HID Central ready – forwarding reports to USB");
+    LOG_INF("DONGLE: READY - forwarding HID reports to USB");
 }
 
 /* ------------------------------------------------------------------ */
@@ -522,7 +521,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
 
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr_str, sizeof(addr_str));
-    printk("*** DONGLE: Connected to %s ***\n", addr_str);
+    LOG_INF("DONGLE: Connected to %s", addr_str);
 
     state = STATE_CONNECTING;
 
@@ -549,7 +548,7 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
         return;
     }
 
-    printk("*** DONGLE: Disconnected (0x%02x) ***\n", reason);
+    LOG_INF("DONGLE: Disconnected (0x%02x)", reason);
 
     /* Cancel any pending deferred discovery */
     k_work_cancel_delayable(&discovery_work);
@@ -597,26 +596,26 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
         return;
     }
 
-    /* Do NOT restart scanning while connected in dongle mode.
-     * Scan callbacks run in BT RX thread and compete with HID
-     * notifications – this causes freezes with high-rate trackball
-     * data.  Scanning restarts in disconnected_cb. */
-
     if (err) {
-        printk("*** DONGLE: Security failed: err %d ***\n", err);
+        LOG_WRN("DONGLE: Security failed: err %d", err);
         LOG_WRN("Security change failed: level %d err %d", level, err);
         if (discover_after_security) {
             discover_after_security = false;
             start_hid_discovery(conn);
         }
     } else {
-        printk("*** DONGLE: Security level %d ***\n", level);
+        LOG_INF("DONGLE: Security level %d", level);
         bt_addr_le_copy(&bonded_addr, bt_conn_get_dst(conn));
         has_bonded_addr = true;
         if (discover_after_security) {
             discover_after_security = false;
             k_work_schedule(&discovery_work, K_MSEC(500));
         }
+
+        /* Restart scanning now that security is established.
+         * Safe because HID notifications use ringbuf+work queue (v33)
+         * and scan callbacks only use deferred logging (v34). */
+        status_scanner_restart_scanning();
     }
 }
 
@@ -715,7 +714,7 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
 
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
-    printk("*** DONGLE: Target found: %s ***\n", addr_str);
+    LOG_INF("DONGLE: Target found: %s", addr_str);
 
     /* Defer connection to work queue – bt_conn_le_create must NOT be
      * called from within the scan callback (BLE RX thread context). */
@@ -789,11 +788,10 @@ static void connect_work_handler(struct k_work *work)
         6, 6, 0, 400   /* 7.5ms interval, no latency, 4s timeout */
     );
 
-    printk("*** DONGLE: Connecting to %s ***\n", addr_str);
+    LOG_INF("DONGLE: Connecting to %s", addr_str);
     err = bt_conn_le_create(&pending_addr, &create_param, &conn_param, &kbd_conn);
     if (err) {
-        printk("*** DONGLE: Connect failed: %d ***\n", err);
-        LOG_ERR("Create connection failed: %d", err);
+        LOG_ERR("DONGLE: Connect failed: %d", err);
         state = STATE_IDLE;
         status_scanner_restart_scanning();
         schedule_reconnect();
@@ -870,7 +868,7 @@ static int hid_central_init(void)
 
     state = STATE_SCANNING;
 #ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
-    printk("*** DONGLE: target='%s' ***\n", CONFIG_PROSPECTOR_DONGLE_TARGET_NAME);
+    LOG_INF("DONGLE: target='%s'", CONFIG_PROSPECTOR_DONGLE_TARGET_NAME);
 #endif
     return 0;
 }
@@ -938,23 +936,19 @@ static void bond_found_cb(const struct bt_bond_info *info, void *user_data)
 
         char addr_str[BT_ADDR_LE_STR_LEN];
         bt_addr_le_to_str(&bonded_addr, addr_str, sizeof(addr_str));
-        printk("*** DONGLE: Restored bond: %s ***\n", addr_str);
+        LOG_INF("DONGLE: Restored bond: %s", addr_str);
     }
 }
 
 #if !IS_ENABLED(CONFIG_ZMK_BLE)
 static int dongle_bt_enable(void)
 {
-    /* Short delay for serial console connection */
-    printk("*** DONGLE v34: Booting... ***\n");
-    k_msleep(2000);
-
     int err = bt_enable(NULL);
     if (err) {
-        printk("*** DONGLE: bt_enable failed: %d ***\n", err);
+        LOG_ERR("DONGLE: bt_enable failed: %d", err);
         return err;
     }
-    printk("*** DONGLE: BT ready ***\n");
+    LOG_INF("DONGLE: BT ready");
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     settings_load();

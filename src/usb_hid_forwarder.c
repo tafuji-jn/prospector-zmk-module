@@ -163,11 +163,11 @@ static void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param)
 {
     switch (status) {
     case USB_DC_CONFIGURED:
-        printk("*** USB_HID: Host configured ***\n");
+        LOG_INF("USB_HID: Host configured");
         usb_ready = true;
         break;
     case USB_DC_DISCONNECTED:
-        printk("*** USB_HID: Disconnected ***\n");
+        LOG_INF("USB_HID: Disconnected");
         usb_ready = false;
         break;
     case USB_DC_SUSPEND:
@@ -203,15 +203,15 @@ int usb_hid_forwarder_init(void)
     ret = usb_enable(usb_status_cb);
     if (ret == -EALREADY) {
         usb_ready = true;
-        printk("*** USB_HID: USB already enabled, assuming ready ***\n");
+        LOG_INF("USB_HID: USB already enabled, assuming ready");
     } else if (ret) {
         LOG_ERR("USB enable failed: %d", ret);
         return ret;
     } else {
-        printk("*** USB_HID: USB enabled, waiting for host ***\n");
+        LOG_INF("USB_HID: USB enabled, waiting for host");
     }
 
-    printk("*** USB_HID: forwarder initialized (ready=%d) ***\n", usb_ready);
+    LOG_INF("USB_HID: forwarder initialized (ready=%d)", usb_ready);
     return 0;
 }
 
