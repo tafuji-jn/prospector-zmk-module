@@ -24,26 +24,6 @@
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
-/* ------------------------------------------------------------------ */
-/* Scan callback ring buffer – offload heavy parsing to work queue    */
-/* ------------------------------------------------------------------ */
-
-#define SCAN_QUEUE_SIZE 16   /* power of 2 */
-#define SCAN_AD_MAX     31   /* BLE 4.x max advertisement data */
-
-struct scan_queued_ad {
-    bt_addr_le_t addr;
-    int8_t  rssi;
-    uint8_t type;
-    uint8_t ad_len;
-    uint8_t ad_data[SCAN_AD_MAX];
-};
-
-static struct scan_queued_ad scan_queue[SCAN_QUEUE_SIZE];
-static volatile uint8_t scan_q_head;
-static volatile uint8_t scan_q_tail;
-static struct k_work scan_process_work;
-
 // External function to trigger high-priority display update (defined in scanner_display.c)
 // Uses weak reference so it compiles even if scanner_display.c is not in the build
 __attribute__((weak)) void scanner_trigger_high_priority_update(void) {
@@ -422,9 +402,8 @@ static const char* get_device_name(const bt_addr_le_t *addr) {
     return "Unknown";
 }
 
-/* Heavy processing – runs in system work queue, NOT BT RX thread */
-static void scan_process_entry(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
-                               struct net_buf_simple *buf) {
+static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
+                         struct net_buf_simple *buf) {
     static int scan_count = 0;
     scan_count++;
     
@@ -583,59 +562,6 @@ static void scan_process_entry(const bt_addr_le_t *addr, int8_t rssi, uint8_t ty
 #endif
 }
 
-/* ------------------------------------------------------------------ */
-/* Work handler: drain scan ring buffer                               */
-/* ------------------------------------------------------------------ */
-
-static void scan_process_work_handler(struct k_work *work) {
-    /* Process ONE entry per invocation so that higher-priority work items
-     * (e.g. hid_send_work for trackball) can run between scan entries. */
-    if (scan_q_tail == scan_q_head) {
-        return;
-    }
-
-    uint8_t idx = scan_q_tail & (SCAN_QUEUE_SIZE - 1);
-    struct scan_queued_ad *entry = &scan_queue[idx];
-
-    struct net_buf_simple buf;
-    net_buf_simple_init_with_data(&buf, entry->ad_data, entry->ad_len);
-    buf.len = entry->ad_len;
-
-    scan_process_entry(&entry->addr, entry->rssi, entry->type, &buf);
-
-    scan_q_tail++;
-
-    /* Re-submit if more entries remain – yields to other pending work */
-    if (scan_q_tail != scan_q_head) {
-        k_work_submit(&scan_process_work);
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* Lightweight scan callback – runs in BT RX thread                   */
-/* Only copies data into ring buffer and submits work.                */
-/* ------------------------------------------------------------------ */
-
-static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
-                          struct net_buf_simple *buf) {
-    /* Ring buffer full → drop (Scanner display gap is acceptable) */
-    if ((uint8_t)(scan_q_head - scan_q_tail) >= SCAN_QUEUE_SIZE) {
-        return;
-    }
-
-    uint8_t idx = scan_q_head & (SCAN_QUEUE_SIZE - 1);
-    struct scan_queued_ad *entry = &scan_queue[idx];
-
-    bt_addr_le_copy(&entry->addr, addr);
-    entry->rssi = rssi;
-    entry->type = type;
-    entry->ad_len = MIN(buf->len, SCAN_AD_MAX);
-    memcpy(entry->ad_data, buf->data, entry->ad_len);
-
-    scan_q_head++;
-    k_work_submit(&scan_process_work);
-}
-
 static void timeout_work_handler(struct k_work *work) {
     // Skip if timeout is disabled (0)
     if (KEYBOARD_TIMEOUT_MS == 0) {
@@ -705,7 +631,6 @@ int zmk_status_scanner_init(void) {
 
     memset(keyboards, 0, sizeof(keyboards));
     k_work_init_delayable(&timeout_work, timeout_work_handler);
-    k_work_init(&scan_process_work, scan_process_work_handler);
 
     LOG_INF("Status scanner initialized with mutex protection");
     return 0;
@@ -818,79 +743,7 @@ int zmk_status_scanner_get_primary_keyboard(void) {
 }
 
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-
-/* ------------------------------------------------------------------ */
-/* Coexistence scan burst – brief scan windows while GATT is active   */
-/* ------------------------------------------------------------------ */
-
-#define SCAN_BURST_ON_MS    50   /* scan for 50 ms */
-#define SCAN_BURST_OFF_MS 3000   /* pause for 3 s  */
-
-static struct k_work_delayable scan_burst_work;
-static bool scan_burst_active;
-static bool scan_burst_running;   /* burst cycle is enabled */
-
-static void scan_burst_work_handler(struct k_work *work) {
-    if (!scan_burst_running) {
-        return;
-    }
-
-    if (scan_burst_active) {
-        /* End of burst – stop scanning, schedule next burst */
-        bt_le_scan_stop();
-        scan_burst_active = false;
-        k_work_schedule(&scan_burst_work, K_MSEC(SCAN_BURST_OFF_MS));
-    } else {
-        /* Start a brief passive scan */
-        struct bt_le_scan_param param = {
-            .type     = BT_LE_SCAN_TYPE_PASSIVE,
-            .options  = BT_LE_SCAN_OPT_NONE,
-            .interval = BT_GAP_SCAN_FAST_INTERVAL,
-            .window   = BT_GAP_SCAN_FAST_WINDOW,
-        };
-        int err = bt_le_scan_start(&param, scan_callback);
-        if (!err) {
-            scan_burst_active = true;
-            k_work_schedule(&scan_burst_work, K_MSEC(SCAN_BURST_ON_MS));
-        } else {
-            LOG_WRN("Scan burst start failed: %d", err);
-            k_work_schedule(&scan_burst_work, K_MSEC(SCAN_BURST_OFF_MS));
-        }
-    }
-}
-
-static void scan_burst_stop(void) {
-    scan_burst_running = false;
-    k_work_cancel_delayable(&scan_burst_work);
-    if (scan_burst_active) {
-        bt_le_scan_stop();
-        scan_burst_active = false;
-    }
-}
-
-int status_scanner_start_coex_scanning(void) {
-    /* Use burst pattern while a GATT connection is active.
-     * Continuous scanning (even at low duty) freezes HID notifications
-     * on this BLE controller.  Brief bursts give the radio scheduler
-     * clear periods for connection events. */
-    static bool burst_init_done;
-    if (!burst_init_done) {
-        k_work_init_delayable(&scan_burst_work, scan_burst_work_handler);
-        burst_init_done = true;
-    }
-    scan_burst_stop();
-    scan_burst_running = true;
-    /* First burst after a short delay to let connection settle */
-    k_work_schedule(&scan_burst_work, K_MSEC(500));
-    LOG_INF("Coex scan burst started (%dms on / %dms off)",
-            SCAN_BURST_ON_MS, SCAN_BURST_OFF_MS);
-    return 0;
-}
-
 int status_scanner_restart_scanning(void) {
-    /* Called when there is NO active connection (disconnect / connect fail).
-     * Use normal continuous passive scanning. */
-    scan_burst_stop();
     struct bt_le_scan_param scan_param = {
         .type = BT_LE_SCAN_TYPE_PASSIVE,
         .options = BT_LE_SCAN_OPT_NONE,
@@ -901,7 +754,7 @@ int status_scanner_restart_scanning(void) {
     if (err) {
         LOG_WRN("Restart scanning failed: %d", err);
     } else {
-        LOG_INF("Scanning restarted (passive, continuous)");
+        LOG_INF("Scanning restarted (passive) for Observer coexistence");
     }
     return err;
 }

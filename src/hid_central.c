@@ -499,11 +499,10 @@ static void subscribe_next_input_report(int idx)
     state = STATE_READY;
     LOG_INF("DONGLE: READY - forwarding HID reports to USB");
 
-    /* NOTE: Do NOT restart scanning while GATT connection is active.
-     * Even brief scan bursts (50ms) with 7.5ms connection interval
-     * completely block HID notification delivery on this BLE controller.
-     * Scanner display updates during connection require a different
-     * approach (e.g. increasing connection interval or dedicated radio). */
+    /* TODO: Restart scanning here for Scanner display updates.
+     * Currently disabled because scan_callback processing is too heavy
+     * for BT RX thread – it blocks trackball HID notifications.
+     * Need to move scan_callback parsing to work queue first. */
 }
 
 /* ------------------------------------------------------------------ */
