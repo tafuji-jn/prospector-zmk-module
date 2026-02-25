@@ -499,10 +499,10 @@ static void subscribe_next_input_report(int idx)
     state = STATE_READY;
     LOG_INF("DONGLE: READY - forwarding HID reports to USB");
 
-    /* Restart scanning for Scanner display coexistence.
-     * Safe now because scan_callback only copies into a ring buffer;
-     * all heavy parsing runs in the system work queue. */
-    status_scanner_restart_scanning();
+    /* Start burst-mode scanning for Scanner display coexistence.
+     * Continuous scanning (even low duty) freezes HID on this controller.
+     * Burst: 50 ms scan → 3 s pause → repeat. */
+    status_scanner_start_coex_scanning();
 }
 
 /* ------------------------------------------------------------------ */

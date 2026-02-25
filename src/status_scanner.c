@@ -706,6 +706,9 @@ int zmk_status_scanner_init(void) {
     memset(keyboards, 0, sizeof(keyboards));
     k_work_init_delayable(&timeout_work, timeout_work_handler);
     k_work_init(&scan_process_work, scan_process_work_handler);
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+    k_work_init_delayable(&scan_burst_work, scan_burst_work_handler);
+#endif
 
     LOG_INF("Status scanner initialized with mutex protection");
     return 0;
@@ -818,22 +821,85 @@ int zmk_status_scanner_get_primary_keyboard(void) {
 }
 
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+
+/* ------------------------------------------------------------------ */
+/* Coexistence scan burst – brief scan windows while GATT is active   */
+/* ------------------------------------------------------------------ */
+
+#define SCAN_BURST_ON_MS    50   /* scan for 50 ms */
+#define SCAN_BURST_OFF_MS 3000   /* pause for 3 s  */
+
+static struct k_work_delayable scan_burst_work;
+static bool scan_burst_active;
+static bool scan_burst_running;   /* burst cycle is enabled */
+
+static void scan_burst_work_handler(struct k_work *work) {
+    if (!scan_burst_running) {
+        return;
+    }
+
+    if (scan_burst_active) {
+        /* End of burst – stop scanning, schedule next burst */
+        bt_le_scan_stop();
+        scan_burst_active = false;
+        k_work_schedule(&scan_burst_work, K_MSEC(SCAN_BURST_OFF_MS));
+    } else {
+        /* Start a brief passive scan */
+        struct bt_le_scan_param param = {
+            .type     = BT_LE_SCAN_TYPE_PASSIVE,
+            .options  = BT_LE_SCAN_OPT_NONE,
+            .interval = BT_GAP_SCAN_FAST_INTERVAL,
+            .window   = BT_GAP_SCAN_FAST_WINDOW,
+        };
+        int err = bt_le_scan_start(&param, scan_callback);
+        if (!err) {
+            scan_burst_active = true;
+            k_work_schedule(&scan_burst_work, K_MSEC(SCAN_BURST_ON_MS));
+        } else {
+            LOG_WRN("Scan burst start failed: %d", err);
+            k_work_schedule(&scan_burst_work, K_MSEC(SCAN_BURST_OFF_MS));
+        }
+    }
+}
+
+static void scan_burst_stop(void) {
+    scan_burst_running = false;
+    k_work_cancel_delayable(&scan_burst_work);
+    if (scan_burst_active) {
+        bt_le_scan_stop();
+        scan_burst_active = false;
+    }
+}
+
+int status_scanner_start_coex_scanning(void) {
+    /* Use burst pattern while a GATT connection is active.
+     * Continuous scanning (even at low duty) freezes HID notifications
+     * on this BLE controller.  Brief bursts give the radio scheduler
+     * clear periods for connection events. */
+    scan_burst_stop();
+    scan_burst_running = true;
+    /* First burst after a short delay to let connection settle */
+    k_work_schedule(&scan_burst_work, K_MSEC(500));
+    LOG_INF("Coex scan burst started (%dms on / %dms off)",
+            SCAN_BURST_ON_MS, SCAN_BURST_OFF_MS);
+    return 0;
+}
+
 int status_scanner_restart_scanning(void) {
-    /* Use very low duty cycle while a GATT connection is active.
-     * The BLE controller shares one radio between scan windows and
-     * connection events; aggressive scanning starves HID notifications.
-     * 0x0320 = 500 ms interval, 0x0018 = 15 ms window → ~3 % duty. */
+    /* Called when there is NO active connection (disconnect / connect fail).
+     * Use normal continuous passive scanning. */
+    scan_burst_stop();
     struct bt_le_scan_param scan_param = {
         .type = BT_LE_SCAN_TYPE_PASSIVE,
         .options = BT_LE_SCAN_OPT_NONE,
-        .interval = 0x0320,  /* 500 ms */
-        .window   = 0x0018,  /*  15 ms */
+        .interval = BT_GAP_SCAN_FAST_INTERVAL,
+        .window = BT_GAP_SCAN_FAST_WINDOW,
     };
     int err = bt_le_scan_start(&scan_param, scan_callback);
     if (err) {
         LOG_WRN("Restart scanning failed: %d", err);
     } else {
-        LOG_INF("Scanning restarted (passive) for Observer coexistence");
+        LOG_INF("Scanning restarted (passive, continuous)");
     }
     return err;
 }

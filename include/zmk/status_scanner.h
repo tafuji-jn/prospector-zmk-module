@@ -116,6 +116,14 @@ int zmk_status_scanner_get_primary_keyboard(void);
  * @return 0 on success, negative error code on failure
  */
 int status_scanner_restart_scanning(void);
+
+/**
+ * @brief Start burst-mode scanning for coexistence with GATT connection
+ *
+ * Brief scan windows (50 ms) separated by long pauses (3 s) to avoid
+ * starving the BLE radio scheduler while a HID connection is active.
+ */
+int status_scanner_start_coex_scanning(void);
 #endif
 
 #ifdef __cplusplus
