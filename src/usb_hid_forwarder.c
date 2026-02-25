@@ -16,19 +16,15 @@
 LOG_MODULE_REGISTER(usb_hid_fwd, CONFIG_ZMK_LOG_LEVEL);
 
 /*
- * USB HID Report Descriptors — split into two interfaces.
+ * Single HID interface with 3 Top-Level Collections (TLCs).
+ * Windows creates separate PDOs for each TLC automatically.
+ * This matches ZMK's own USB HID approach (zmkfirmware/zmk usb_hid.c).
  *
- * Windows requires separate USB HID interfaces for keyboard and mouse to
- * create distinct TLC (Top-Level Collection) device nodes.  A single
- * interface with multiple Application Collections works on macOS/Linux
- * but Windows silently ignores the mouse collection.
- *
- * HID_0: Keyboard (Report ID 1) + Consumer Control (Report ID 2)
- * HID_1: Mouse / Pointing Device (Report ID 3)
+ * Report ID 1: Keyboard (8-byte boot protocol compatible)
+ * Report ID 2: Consumer Control (2-byte usage code)
+ * Report ID 3: Mouse / Pointing Device (9-byte)
  */
-
-/* HID_0: Keyboard + Consumer Control */
-static const uint8_t hid_report_desc_kb[] = {
+static const uint8_t hid_report_desc[] = {
     /* Keyboard */
     0x05, 0x01,       /* Usage Page (Generic Desktop) */
     0x09, 0x06,       /* Usage (Keyboard) */
@@ -82,10 +78,8 @@ static const uint8_t hid_report_desc_kb[] = {
     0x95, 0x01,       /*   Report Count (1) */
     0x81, 0x00,       /*   Input (Data, Array) */
     0xC0,             /* End Collection */
-};
 
-/* HID_1: Mouse / Pointing Device */
-static const uint8_t hid_report_desc_mouse[] = {
+    /* Mouse / Pointing Device */
     0x05, 0x01,       /* Usage Page (Generic Desktop) */
     0x09, 0x02,       /* Usage (Mouse) */
     0xA1, 0x01,       /* Collection (Application) */
@@ -133,8 +127,7 @@ static const uint8_t hid_report_desc_mouse[] = {
     0xC0,             /* End Collection (Application) */
 };
 
-static const struct device *hid_dev_kb;    /* HID_0: keyboard + consumer */
-static const struct device *hid_dev_mouse; /* HID_1: mouse */
+static const struct device *hid_dev;
 static bool usb_ready;
 
 /* Callback when USB HID interrupt endpoint write completes */
@@ -154,13 +147,9 @@ static int set_report_cb(const struct device *dev,
     return 0;
 }
 
-static const struct hid_ops usb_hid_kb_ops = {
+static const struct hid_ops usb_hid_ops = {
     .int_in_ready = int_in_ready_cb,
     .set_report = set_report_cb,
-};
-
-static const struct hid_ops usb_hid_mouse_ops = {
-    .int_in_ready = int_in_ready_cb,
 };
 
 /* USB device status callback */
@@ -190,35 +179,18 @@ int usb_hid_forwarder_init(void)
 {
     int ret;
 
-    /* HID_0: Keyboard + Consumer Control */
-    hid_dev_kb = device_get_binding("HID_0");
-    if (hid_dev_kb == NULL) {
-        LOG_ERR("Cannot find USB HID_0 device");
+    hid_dev = device_get_binding("HID_0");
+    if (hid_dev == NULL) {
+        LOG_ERR("Cannot find USB HID device");
         return -ENODEV;
     }
 
-    usb_hid_register_device(hid_dev_kb, hid_report_desc_kb,
-                            sizeof(hid_report_desc_kb), &usb_hid_kb_ops);
+    usb_hid_register_device(hid_dev, hid_report_desc,
+                            sizeof(hid_report_desc), &usb_hid_ops);
 
-    ret = usb_hid_init(hid_dev_kb);
+    ret = usb_hid_init(hid_dev);
     if (ret) {
-        LOG_ERR("USB HID_0 init failed: %d", ret);
-        return ret;
-    }
-
-    /* HID_1: Mouse */
-    hid_dev_mouse = device_get_binding("HID_1");
-    if (hid_dev_mouse == NULL) {
-        LOG_ERR("Cannot find USB HID_1 device");
-        return -ENODEV;
-    }
-
-    usb_hid_register_device(hid_dev_mouse, hid_report_desc_mouse,
-                            sizeof(hid_report_desc_mouse), &usb_hid_mouse_ops);
-
-    ret = usb_hid_init(hid_dev_mouse);
-    if (ret) {
-        LOG_ERR("USB HID_1 init failed: %d", ret);
+        LOG_ERR("USB HID init failed: %d", ret);
         return ret;
     }
 
@@ -233,42 +205,29 @@ int usb_hid_forwarder_init(void)
         LOG_INF("USB_HID: USB enabled, waiting for host");
     }
 
-    LOG_INF("USB_HID: forwarder initialized (kb=%p mouse=%p ready=%d)",
-            hid_dev_kb, hid_dev_mouse, usb_ready);
+    LOG_INF("USB_HID: forwarder initialized (ready=%d)", usb_ready);
     return 0;
 }
 
 int usb_hid_forwarder_send(const uint8_t *report, uint16_t len)
 {
-    if (!usb_ready || len == 0) {
-        return -ENODEV;
-    }
-
-    /* Route to correct HID interface based on Report ID (first byte) */
-    const struct device *dev;
-    if (report[0] == 0x03) {
-        dev = hid_dev_mouse;
-    } else {
-        dev = hid_dev_kb;
-    }
-
-    if (dev == NULL) {
+    if (!usb_ready || hid_dev == NULL) {
         return -ENODEV;
     }
 
     /* Called from system work queue (not BT RX thread), so short
      * sleeps on EAGAIN are safe and won't stall BLE processing. */
-    int ret = hid_int_ep_write(dev, report, len, NULL);
+    int ret = hid_int_ep_write(hid_dev, report, len, NULL);
     if (ret == -EAGAIN) {
         k_msleep(1);
-        ret = hid_int_ep_write(dev, report, len, NULL);
+        ret = hid_int_ep_write(hid_dev, report, len, NULL);
         if (ret == -EAGAIN) {
             k_msleep(1);
-            ret = hid_int_ep_write(dev, report, len, NULL);
+            ret = hid_int_ep_write(hid_dev, report, len, NULL);
         }
     }
     if (ret) {
-        LOG_WRN("USB HID write: %d (id=0x%02x)", ret, report[0]);
+        LOG_WRN("USB HID write: %d", ret);
     }
 
     return ret;
@@ -276,7 +235,7 @@ int usb_hid_forwarder_send(const uint8_t *report, uint16_t len)
 
 bool usb_hid_forwarder_is_ready(void)
 {
-    return usb_ready && hid_dev_kb != NULL;
+    return usb_ready && hid_dev != NULL;
 }
 
 static int usb_hid_forwarder_sys_init(void)
