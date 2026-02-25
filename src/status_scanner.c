@@ -819,11 +819,15 @@ int zmk_status_scanner_get_primary_keyboard(void) {
 
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
 int status_scanner_restart_scanning(void) {
+    /* Use very low duty cycle while a GATT connection is active.
+     * The BLE controller shares one radio between scan windows and
+     * connection events; aggressive scanning starves HID notifications.
+     * 0x0320 = 500 ms interval, 0x0018 = 15 ms window → ~3 % duty. */
     struct bt_le_scan_param scan_param = {
         .type = BT_LE_SCAN_TYPE_PASSIVE,
         .options = BT_LE_SCAN_OPT_NONE,
-        .interval = BT_GAP_SCAN_FAST_INTERVAL,
-        .window = BT_GAP_SCAN_FAST_WINDOW,
+        .interval = 0x0320,  /* 500 ms */
+        .window   = 0x0018,  /*  15 ms */
     };
     int err = bt_le_scan_start(&scan_param, scan_callback);
     if (err) {
