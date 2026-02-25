@@ -499,10 +499,11 @@ static void subscribe_next_input_report(int idx)
     state = STATE_READY;
     LOG_INF("DONGLE: READY - forwarding HID reports to USB");
 
-    /* Start burst-mode scanning for Scanner display coexistence.
-     * Continuous scanning (even low duty) freezes HID on this controller.
-     * Burst: 50 ms scan → 3 s pause → repeat. */
-    status_scanner_start_coex_scanning();
+    /* NOTE: Do NOT restart scanning while GATT connection is active.
+     * Even brief scan bursts (50ms) with 7.5ms connection interval
+     * completely block HID notification delivery on this BLE controller.
+     * Scanner display updates during connection require a different
+     * approach (e.g. increasing connection interval or dedicated radio). */
 }
 
 /* ------------------------------------------------------------------ */
