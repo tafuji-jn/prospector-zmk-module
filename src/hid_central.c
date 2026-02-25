@@ -146,15 +146,7 @@ static void hid_send_work_handler(struct k_work *work)
         struct hid_queued_report *rpt = &hid_queue[idx];
 
         if (usb_hid_forwarder_is_ready()) {
-            int ret = usb_hid_forwarder_send(rpt->data, rpt->len);
-            if (rpt->data[0] == 0x03) {
-                int16_t x = (int16_t)(rpt->data[2] | (rpt->data[3] << 8));
-                int16_t y = (int16_t)(rpt->data[4] | (rpt->data[5] << 8));
-                LOG_INF("USB_MOUSE: ret=%d btn=0x%02x x=%d y=%d",
-                        ret, rpt->data[1], x, y);
-            }
-        } else {
-            LOG_WRN("USB_SEND: not ready, dropping id=0x%02x", rpt->data[0]);
+            usb_hid_forwarder_send(rpt->data, rpt->len);
         }
 
         hid_q_tail++;
@@ -235,10 +227,6 @@ static uint8_t hid_notify_cb(struct bt_conn *conn,
         }
     }
 
-    if (report_id == 3) {
-        LOG_INF("MOUSE: id=%d len=%d handle=0x%04x", report_id, length,
-                params->value_handle);
-    }
     forward_hid_report(report_id, data, length);
     return BT_GATT_ITER_CONTINUE;
 }
