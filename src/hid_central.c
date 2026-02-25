@@ -179,6 +179,7 @@ static void forward_hid_report(uint8_t report_id, const uint8_t *data,
         memcpy(&buf[1], data, 9);
         buf_len = 10;
     } else {
+        LOG_WRN("HID DROP: id=%d len=%d (no match)", report_id, len);
         return; /* unknown report, silently drop */
     }
 
@@ -226,6 +227,10 @@ static uint8_t hid_notify_cb(struct bt_conn *conn,
         }
     }
 
+    if (report_id == 3) {
+        LOG_INF("MOUSE: id=%d len=%d handle=0x%04x", report_id, length,
+                params->value_handle);
+    }
     forward_hid_report(report_id, data, length);
     return BT_GATT_ITER_CONTINUE;
 }
