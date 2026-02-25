@@ -499,10 +499,10 @@ static void subscribe_next_input_report(int idx)
     state = STATE_READY;
     LOG_INF("DONGLE: READY - forwarding HID reports to USB");
 
-    /* Restart scanning for Scanner display updates.
-     * Must be AFTER GATT discovery + subscribe completes – scanning
-     * during discovery saturates the BT RX thread and blocks GATT. */
-    status_scanner_restart_scanning();
+    /* TODO: Restart scanning here for Scanner display updates.
+     * Currently disabled because scan_callback processing is too heavy
+     * for BT RX thread – it blocks trackball HID notifications.
+     * Need to move scan_callback parsing to work queue first. */
 }
 
 /* ------------------------------------------------------------------ */
