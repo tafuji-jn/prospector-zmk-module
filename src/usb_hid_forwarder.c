@@ -202,6 +202,9 @@ int usb_hid_forwarder_init(void)
         return ret;
     }
 
+    /* Diagnostic: verify descriptor size and wDescriptorLength match */
+    LOG_INF("USB_HID: report_desc size=%u bytes", (unsigned int)sizeof(hid_report_desc));
+
     ret = usb_enable(usb_status_cb);
     if (ret == -EALREADY) {
         usb_ready = true;

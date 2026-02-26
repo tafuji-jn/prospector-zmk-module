@@ -43,6 +43,13 @@
     };
 };
 
+/* Disable the board-level CDC ACM instance (from cdc_acm_serial.dtsi).
+ * Without this, there are TWO CDC ACM instances (board + overlay), creating
+ * 5 USB interfaces. This can interfere with Windows HID TLC enumeration. */
+&board_cdc_acm_uart {
+    status = "disabled";
+};
+
 /* Disable default SPI2 */
 &spi2 {
     status = "disabled";
