@@ -21,6 +21,14 @@ extern "C" {
 #define ZMK_STATUS_SCANNER_MAX_KEYBOARDS CONFIG_PROSPECTOR_MAX_KEYBOARDS
 
 /**
+ * @brief Data source for keyboard status
+ */
+enum zmk_status_source {
+    ZMK_STATUS_SOURCE_ADVERTISEMENT = 0,   // BLE advertisement scan
+    ZMK_STATUS_SOURCE_GATT = 1,            // GATT notification (dongle connection)
+};
+
+/**
  * @brief Keyboard status information
  */
 struct zmk_keyboard_status {
@@ -31,6 +39,7 @@ struct zmk_keyboard_status {
     char ble_name[32];                     // BLE device name from advertisement
     uint8_t ble_addr[6];                   // BLE MAC address for unique identification
     uint8_t ble_addr_type;                 // BLE address type (public/random)
+    enum zmk_status_source data_source;    // How status data is received
 };
 
 /**

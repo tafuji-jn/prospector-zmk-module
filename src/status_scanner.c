@@ -210,6 +210,7 @@ static void process_advertisement_with_name(const struct zmk_status_adv_data *ad
     keyboards[index].active = true;
     keyboards[index].last_seen = now;
     keyboards[index].rssi = rssi;
+    keyboards[index].data_source = ZMK_STATUS_SOURCE_ADVERTISEMENT;
     memcpy(&keyboards[index].data, adv_data, sizeof(struct zmk_status_adv_data));
 
     // Store BLE address for unique identification
@@ -782,6 +783,7 @@ void status_scanner_update_from_gatt(const bt_addr_le_t *addr,
     keyboards[index].active = true;
     keyboards[index].last_seen = now;
     keyboards[index].rssi = rssi;
+    keyboards[index].data_source = ZMK_STATUS_SOURCE_GATT;
     memcpy(&keyboards[index].data, data, sizeof(struct zmk_status_adv_data));
 
     memcpy(keyboards[index].ble_addr, addr->a.val, 6);
