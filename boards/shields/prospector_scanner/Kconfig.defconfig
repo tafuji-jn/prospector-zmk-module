@@ -10,6 +10,7 @@ config ZMK_DISPLAY
 
 # MIPI DBI for ST7789V
 config MIPI_DBI
+    bool
     default y
 
 config SPI
