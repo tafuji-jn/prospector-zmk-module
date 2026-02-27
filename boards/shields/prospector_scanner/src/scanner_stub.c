@@ -369,12 +369,6 @@ static void schedule_display_update(void) {
 int scanner_msg_send_keyboard_data(const struct zmk_status_adv_data *adv_data,
                                    int8_t rssi, const char *device_name,
                                    const uint8_t *ble_addr, uint8_t ble_addr_type) {
-    LOG_INF("kbd_data IN: name='%s' layer=%d addr=%02X:%02X:%02X:%02X:%02X:%02X",
-            device_name ? device_name : "(null)",
-            adv_data->active_layer,
-            ble_addr ? ble_addr[5] : 0, ble_addr ? ble_addr[4] : 0,
-            ble_addr ? ble_addr[3] : 0, ble_addr ? ble_addr[2] : 0,
-            ble_addr ? ble_addr[1] : 0, ble_addr ? ble_addr[0] : 0);
     if (!mutex_initialized) {
         k_mutex_init(&data_mutex);
         mutex_initialized = true;
@@ -460,8 +454,12 @@ int scanner_msg_send_keyboard_data(const struct zmk_status_adv_data *adv_data,
     }
 
     if (device_name && device_name[0] != '\0') {
-        strncpy(keyboards[index].name, device_name, MAX_NAME_LEN - 1);
-        keyboards[index].name[MAX_NAME_LEN - 1] = '\0';
+        /* Don't overwrite a known name with "Unknown" (name cache eviction) */
+        if (strcmp(device_name, "Unknown") != 0 ||
+            keyboards[index].name[0] == '\0') {
+            strncpy(keyboards[index].name, device_name, MAX_NAME_LEN - 1);
+            keyboards[index].name[MAX_NAME_LEN - 1] = '\0';
+        }
     } else if (keyboards[index].name[0] == '\0') {
         snprintf(keyboards[index].name, MAX_NAME_LEN, "Keyboard %d", index);
     }
