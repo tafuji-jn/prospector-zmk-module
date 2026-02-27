@@ -177,8 +177,38 @@ int usb_hid_forwarder_init(void)
         return ret;
     }
 
-    /* Diagnostic: verify descriptor size and wDescriptorLength match */
-    LOG_INF("USB_HID: report_desc size=%u bytes", (unsigned int)sizeof(hid_report_desc));
+    /* Diagnostic: verify descriptor size, dump first/last bytes, and
+     * read back wDescriptorLength from the HID class descriptor. */
+    printk("USB_HID_DIAG: sizeof(hid_report_desc)=%u\n",
+           (unsigned int)sizeof(hid_report_desc));
+    printk("USB_HID_DIAG: desc[0..5]=%02x %02x %02x %02x %02x %02x\n",
+           hid_report_desc[0], hid_report_desc[1], hid_report_desc[2],
+           hid_report_desc[3], hid_report_desc[4], hid_report_desc[5]);
+    {
+        unsigned int last = sizeof(hid_report_desc) - 1;
+        printk("USB_HID_DIAG: desc[%u..%u]=%02x %02x %02x %02x %02x %02x\n",
+               last - 5, last,
+               hid_report_desc[last - 5], hid_report_desc[last - 4],
+               hid_report_desc[last - 3], hid_report_desc[last - 2],
+               hid_report_desc[last - 1], hid_report_desc[last]);
+    }
+
+    /* Read back wDescriptorLength from the USB config descriptor structure.
+     * The HID class descriptor is right after the interface descriptor. */
+    {
+        const struct usb_cfg_data *cfg = hid_dev->config;
+        const uint8_t *iface = cfg->interface_descriptor;
+        /* HID class descriptor starts right after 9-byte interface descriptor */
+        const uint8_t *hid_class_desc = iface + 9;
+        uint16_t w_desc_len = hid_class_desc[7] | (hid_class_desc[8] << 8);
+        printk("USB_HID_DIAG: wDescriptorLength=%u (should=%u)\n",
+               w_desc_len, (unsigned int)sizeof(hid_report_desc));
+        printk("USB_HID_DIAG: HID class desc bytes: "
+               "%02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+               hid_class_desc[0], hid_class_desc[1], hid_class_desc[2],
+               hid_class_desc[3], hid_class_desc[4], hid_class_desc[5],
+               hid_class_desc[6], hid_class_desc[7], hid_class_desc[8]);
+    }
 
     ret = usb_enable(usb_status_cb);
     if (ret == -EALREADY) {
