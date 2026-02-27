@@ -948,9 +948,21 @@ static uint8_t status_notify_cb(struct bt_conn *conn,
     const struct zmk_status_adv_data *status_data = data;
     const bt_addr_le_t *addr = bt_conn_get_dst(conn);
 
-    LOG_INF("GATT notify: layer=%d mod=0x%02x wpm=%d bat=%d%%",
+    /* Ensure name is available — last-resort fallback to target name */
+    if (connected_kbd_name[0] == '\0') {
+#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
+        const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
+        if (target[0] != '\0') {
+            strncpy(connected_kbd_name, target, sizeof(connected_kbd_name) - 1);
+            connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
+            LOG_INF("GATT notify: name was empty, set to '%s'", connected_kbd_name);
+        }
+#endif
+    }
+
+    LOG_INF("GATT notify: layer=%d mod=0x%02x bat=%d%% name='%s'",
             status_data->active_layer, status_data->modifier_flags,
-            status_data->wpm_value, status_data->battery_level);
+            status_data->battery_level, connected_kbd_name);
 
     status_scanner_update_from_gatt(addr, status_data, 0, connected_kbd_name);
 
