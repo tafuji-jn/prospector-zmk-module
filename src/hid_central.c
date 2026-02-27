@@ -563,6 +563,18 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr_str, sizeof(addr_str));
     LOG_INF("DONGLE: Connected to %s", addr_str);
 
+    /* Ensure device name is set (bonded reconnect skips scan callback) */
+    if (connected_kbd_name[0] == '\0') {
+#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
+        const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
+        if (target[0] != '\0') {
+            strncpy(connected_kbd_name, target, sizeof(connected_kbd_name) - 1);
+            connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
+            LOG_INF("Using target name: %s", connected_kbd_name);
+        }
+#endif
+    }
+
     state = STATE_CONNECTING;
 
     /* Request security – GATT discovery will start in security_changed_cb
