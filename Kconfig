@@ -134,6 +134,18 @@ config ZMK_STATUS_ADV_AUX2_PERIPHERAL
       Which peripheral index to display in the Aux2 slot.
       Default is 2 (third connected peripheral).
 
+config PROSPECTOR_STATUS_GATT_SERVICE
+    bool "Prospector Status GATT Service"
+    default n
+    depends on BT
+    help
+      Expose keyboard status (layer, battery, WPM, modifiers) as a
+      custom BLE GATT service.  Any Prospector Dongle can subscribe
+      to receive status updates without BLE scanning.
+
+      To enable: add prospector-zmk-module to west.yml and set
+      CONFIG_PROSPECTOR_STATUS_GATT_SERVICE=y in your keyboard .conf.
+
 config PROSPECTOR_MODE_SCANNER
     bool "Enable Prospector Scanner Mode"
     default n

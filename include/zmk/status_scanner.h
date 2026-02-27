@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <zephyr/bluetooth/addr.h>
 #include <zmk/status_advertisement.h>
 
 #ifdef __cplusplus
@@ -116,6 +117,34 @@ int zmk_status_scanner_get_primary_keyboard(void);
  * @return 0 on success, negative error code on failure
  */
 int status_scanner_restart_scanning(void);
+
+/**
+ * @brief Update keyboard status from GATT notification data
+ *
+ * Called by hid_central.c when a Prospector Status GATT notification
+ * is received from the connected keyboard.  This bypasses the BLE
+ * scan path entirely, avoiding BT RX thread contention with HID.
+ *
+ * @param addr       BLE address of the keyboard
+ * @param data       Pointer to 26-byte zmk_status_adv_data
+ * @param rssi       Connection RSSI (or 0 if unknown)
+ * @param device_name  Human-readable device name
+ */
+void status_scanner_update_from_gatt(const bt_addr_le_t *addr,
+                                      const struct zmk_status_adv_data *data,
+                                      int8_t rssi,
+                                      const char *device_name);
+
+/**
+ * @brief Update RSSI for a connected keyboard
+ *
+ * Called periodically (1 Hz) by hid_central.c to keep the RSSI
+ * value fresh while the keyboard is connected via GATT.
+ *
+ * @param addr  BLE address of the keyboard
+ * @param rssi  Latest RSSI reading
+ */
+void status_scanner_update_rssi(const bt_addr_le_t *addr, int8_t rssi);
 #endif
 
 #ifdef __cplusplus

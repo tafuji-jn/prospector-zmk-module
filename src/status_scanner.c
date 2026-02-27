@@ -743,6 +743,89 @@ int zmk_status_scanner_get_primary_keyboard(void) {
 }
 
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+
+void status_scanner_update_from_gatt(const bt_addr_le_t *addr,
+                                      const struct zmk_status_adv_data *data,
+                                      int8_t rssi,
+                                      const char *device_name)
+{
+    if (scanner_lock(K_MSEC(5)) != 0) {
+        LOG_DBG("GATT status update skipped - mutex busy");
+        return;
+    }
+
+    uint32_t now = k_uptime_get_32();
+    uint32_t keyboard_id = get_keyboard_id_from_data(data);
+
+    int index = find_keyboard_by_ble_addr(addr);
+
+    if (index < 0) {
+        index = find_keyboard_by_id_and_role(keyboard_id, data->device_role);
+    }
+
+    bool is_new = false;
+    if (index < 0) {
+        index = find_empty_slot();
+        if (index < 0) {
+            LOG_WRN("No empty slots for GATT keyboard");
+            scanner_unlock();
+            return;
+        }
+        is_new = true;
+    }
+
+    bool high_priority_change = is_new ||
+        (keyboards[index].data.active_layer != data->active_layer) ||
+        (keyboards[index].data.modifier_flags != data->modifier_flags) ||
+        (keyboards[index].data.profile_slot != data->profile_slot);
+
+    keyboards[index].active = true;
+    keyboards[index].last_seen = now;
+    keyboards[index].rssi = rssi;
+    memcpy(&keyboards[index].data, data, sizeof(struct zmk_status_adv_data));
+
+    memcpy(keyboards[index].ble_addr, addr->a.val, 6);
+    keyboards[index].ble_addr_type = addr->type;
+
+    if (device_name && device_name[0] != '\0') {
+        if (keyboards[index].ble_name[0] == '\0' ||
+            strcmp(device_name, "Unknown") != 0) {
+            strncpy(keyboards[index].ble_name, device_name,
+                    sizeof(keyboards[index].ble_name) - 1);
+            keyboards[index].ble_name[sizeof(keyboards[index].ble_name) - 1] = '\0';
+        }
+    }
+
+    scanner_unlock();
+
+    /* Send to display via message queue */
+    const char *name = device_name ? device_name : "Unknown";
+    scanner_msg_send_keyboard_data(data, rssi, name, addr->a.val, addr->type);
+
+    if (high_priority_change) {
+        scanner_trigger_high_priority_update();
+    }
+
+    if (is_new) {
+        LOG_INF("GATT: New keyboard found (slot %d): %s", index, name);
+    }
+}
+
+void status_scanner_update_rssi(const bt_addr_le_t *addr, int8_t rssi)
+{
+    if (scanner_lock(K_MSEC(5)) != 0) {
+        return;
+    }
+
+    int index = find_keyboard_by_ble_addr(addr);
+    if (index >= 0) {
+        keyboards[index].rssi = rssi;
+        keyboards[index].last_seen = k_uptime_get_32();
+    }
+
+    scanner_unlock();
+}
+
 int status_scanner_restart_scanning(void) {
     struct bt_le_scan_param scan_param = {
         .type = BT_LE_SCAN_TYPE_PASSIVE,

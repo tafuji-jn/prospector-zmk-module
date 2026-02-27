@@ -19,6 +19,8 @@
 #include <zmk/hid_central.h>
 #include <zmk/usb_hid_forwarder.h>
 #include <zmk/status_scanner.h>
+#include <zmk/status_gatt_service.h>
+#include <zmk/status_advertisement.h>
 
 LOG_MODULE_REGISTER(hid_central, CONFIG_ZMK_LOG_LEVEL);
 
@@ -93,6 +95,31 @@ static struct k_work_delayable discovery_work;
 
 /* Flag: discovery is waiting for security to be established */
 static bool discover_after_security;
+
+/* ------------------------------------------------------------------ */
+/* Prospector Status GATT service discovery state                     */
+/* ------------------------------------------------------------------ */
+
+static struct bt_gatt_discover_params status_disc_params;
+static struct bt_gatt_discover_params status_chr_disc_params;
+static struct bt_gatt_subscribe_params status_sub_params;
+static bool status_svc_subscribed;
+static uint16_t status_svc_start;
+static uint16_t status_svc_end;
+
+/* Static 128-bit UUID storage for async GATT discovery */
+static struct bt_uuid_128 disc_uuid_status_svc =
+    BT_UUID_INIT_128(BT_UUID_PROSPECTOR_STATUS_SVC_VAL);
+static struct bt_uuid_128 disc_uuid_status_chr =
+    BT_UUID_INIT_128(BT_UUID_PROSPECTOR_STATUS_CHR_VAL);
+
+/* RSSI periodic update (1 Hz) */
+static struct k_work_delayable rssi_work;
+
+/* Connected keyboard device name (captured during scan) */
+static char connected_kbd_name[32];
+
+static void start_status_service_discovery(struct bt_conn *conn);
 
 /* Flag: PSA diagnostic test already run */
 static bool psa_diag_done;
@@ -503,10 +530,14 @@ static void subscribe_next_input_report(int idx)
     state = STATE_READY;
     LOG_INF("DONGLE: READY - forwarding HID reports to USB");
 
-    /* TODO: Restart scanning here for Scanner display updates.
-     * Currently disabled because scan_callback processing is too heavy
-     * for BT RX thread – it blocks trackball HID notifications.
-     * Need to move scan_callback parsing to work queue first. */
+    /* Try to discover Prospector Status GATT service for scan-free
+     * display updates.  If the keyboard doesn't expose the service
+     * (old firmware), we fall back to BLE scanning. */
+    status_svc_subscribed = false;
+    start_status_service_discovery(kbd_conn);
+
+    /* Start periodic RSSI polling (1 Hz) */
+    k_work_schedule(&rssi_work, K_SECONDS(1));
 }
 
 /* ------------------------------------------------------------------ */
@@ -561,15 +592,20 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 
     /* Cancel any pending deferred discovery */
     k_work_cancel_delayable(&discovery_work);
+    k_work_cancel_delayable(&rssi_work);
 
     bt_conn_unref(kbd_conn);
     kbd_conn = NULL;
     state = STATE_IDLE;
 
-    /* Reset subscribe params */
+    /* Reset HID subscribe params */
     for (int i = 0; i < MAX_HID_REPORTS; i++) {
         sub_params[i].value_handle = 0;
     }
+
+    /* Reset status service subscribe params */
+    status_sub_params.value_handle = 0;
+    status_svc_subscribed = false;
 
     /* Send empty keyboard report to release all keys */
     if (usb_hid_forwarder_is_ready()) {
@@ -721,6 +757,12 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
     bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
     LOG_INF("DONGLE: Target found: %s", addr_str);
 
+    /* Capture device name for GATT-based status display */
+    if (name && strcmp(name, "Unknown") != 0) {
+        strncpy(connected_kbd_name, name, sizeof(connected_kbd_name) - 1);
+        connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
+    }
+
     /* Defer connection to work queue – bt_conn_le_create must NOT be
      * called from within the scan callback (BLE RX thread context). */
     bt_addr_le_copy(&pending_addr, addr);
@@ -861,6 +903,152 @@ static void schedule_reconnect(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Prospector Status GATT service discovery + subscribe               */
+/* ------------------------------------------------------------------ */
+
+static uint8_t status_notify_cb(struct bt_conn *conn,
+                                 struct bt_gatt_subscribe_params *params,
+                                 const void *data, uint16_t length)
+{
+    if (!data) {
+        LOG_INF("Status GATT notification unsubscribed");
+        params->value_handle = 0;
+        status_svc_subscribed = false;
+        return BT_GATT_ITER_STOP;
+    }
+
+    if (length != sizeof(struct zmk_status_adv_data)) {
+        LOG_WRN("Status notify: unexpected length %d (expected %d)",
+                length, sizeof(struct zmk_status_adv_data));
+        return BT_GATT_ITER_CONTINUE;
+    }
+
+    const struct zmk_status_adv_data *status_data = data;
+    const bt_addr_le_t *addr = bt_conn_get_dst(conn);
+
+    status_scanner_update_from_gatt(addr, status_data, 0, connected_kbd_name);
+
+    return BT_GATT_ITER_CONTINUE;
+}
+
+static void status_subscribe_cb(struct bt_conn *conn, uint8_t err,
+                                 struct bt_gatt_subscribe_params *params)
+{
+    if (err) {
+        LOG_WRN("Status GATT subscribe failed: %d", err);
+        /* Fallback: restart scanning for advertisement-based updates */
+        LOG_INF("Falling back to BLE scanning for status updates");
+        status_scanner_restart_scanning();
+        return;
+    }
+
+    status_svc_subscribed = true;
+    LOG_INF("Status GATT subscribed (handle 0x%04x) - scan-free status updates active",
+            params->value_handle);
+    /* No need to restart scanning — GATT provides status data */
+}
+
+/* Phase 1 callback: discover Status characteristic within service */
+static uint8_t status_chr_disc_cb(struct bt_conn *conn,
+                                   const struct bt_gatt_attr *attr,
+                                   struct bt_gatt_discover_params *params)
+{
+    if (!attr) {
+        LOG_WRN("Status characteristic NOT found");
+        LOG_INF("Falling back to BLE scanning for status updates");
+        status_scanner_restart_scanning();
+        return BT_GATT_ITER_STOP;
+    }
+
+    struct bt_gatt_chrc *chrc = (struct bt_gatt_chrc *)attr->user_data;
+    LOG_INF("Status characteristic at 0x%04x", chrc->value_handle);
+
+    /* Subscribe to notifications */
+    status_sub_params.notify = status_notify_cb;
+    status_sub_params.subscribe = status_subscribe_cb;
+    status_sub_params.value_handle = chrc->value_handle;
+    status_sub_params.ccc_handle = chrc->value_handle + 1;
+    status_sub_params.value = BT_GATT_CCC_NOTIFY;
+
+    int err = bt_gatt_subscribe(conn, &status_sub_params);
+    if (err) {
+        LOG_WRN("Status GATT subscribe start failed: %d", err);
+        status_scanner_restart_scanning();
+    }
+
+    return BT_GATT_ITER_STOP;
+}
+
+/* Phase 0 callback: discover Status primary service */
+static uint8_t status_svc_disc_cb(struct bt_conn *conn,
+                                   const struct bt_gatt_attr *attr,
+                                   struct bt_gatt_discover_params *params)
+{
+    if (!attr) {
+        LOG_INF("Prospector Status GATT service not found (old firmware?)");
+        LOG_INF("Falling back to BLE scanning for status updates");
+        status_scanner_restart_scanning();
+        return BT_GATT_ITER_STOP;
+    }
+
+    struct bt_gatt_service_val *svc = (struct bt_gatt_service_val *)attr->user_data;
+    status_svc_start = attr->handle;
+    status_svc_end = svc->end_handle;
+    LOG_INF("Status GATT service 0x%04x-0x%04x", status_svc_start, status_svc_end);
+
+    /* Discover characteristic within service range */
+    memset(&status_chr_disc_params, 0, sizeof(status_chr_disc_params));
+    status_chr_disc_params.uuid = &disc_uuid_status_chr.uuid;
+    status_chr_disc_params.func = status_chr_disc_cb;
+    status_chr_disc_params.start_handle = status_svc_start + 1;
+    status_chr_disc_params.end_handle = status_svc_end;
+    status_chr_disc_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+
+    int err = bt_gatt_discover(conn, &status_chr_disc_params);
+    if (err) {
+        LOG_WRN("Status char discovery failed: %d", err);
+        status_scanner_restart_scanning();
+    }
+
+    return BT_GATT_ITER_STOP;
+}
+
+static void start_status_service_discovery(struct bt_conn *conn)
+{
+    memset(&status_disc_params, 0, sizeof(status_disc_params));
+    status_disc_params.uuid = &disc_uuid_status_svc.uuid;
+    status_disc_params.func = status_svc_disc_cb;
+    status_disc_params.start_handle = BT_ATT_FIRST_ATTRIBUTE_HANDLE;
+    status_disc_params.end_handle = BT_ATT_LAST_ATTRIBUTE_HANDLE;
+    status_disc_params.type = BT_GATT_DISCOVER_PRIMARY;
+
+    int err = bt_gatt_discover(conn, &status_disc_params);
+    if (err) {
+        LOG_WRN("Status service discovery start failed: %d", err);
+        status_scanner_restart_scanning();
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* RSSI periodic update (1 Hz)                                        */
+/* ------------------------------------------------------------------ */
+
+static void rssi_work_handler(struct k_work *work)
+{
+    if (!kbd_conn || state != STATE_READY) {
+        return;
+    }
+
+    /* Keep last_seen fresh so the keyboard doesn't time out while
+     * connected (RSSI value comes from GATT notification path or is
+     * left at 0 — acceptable for connected-dongle use case). */
+    const bt_addr_le_t *addr = bt_conn_get_dst(kbd_conn);
+    status_scanner_update_rssi(addr, 0);
+
+    k_work_schedule(&rssi_work, K_SECONDS(1));
+}
+
+/* ------------------------------------------------------------------ */
 /* Initialization                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -868,8 +1056,10 @@ static int hid_central_init(void)
 {
     k_work_init_delayable(&reconnect_work, reconnect_work_handler);
     k_work_init_delayable(&discovery_work, discovery_work_handler);
+    k_work_init_delayable(&rssi_work, rssi_work_handler);
     k_work_init(&connect_work, connect_work_handler);
     k_work_init(&hid_send_work, hid_send_work_handler);
+    memset(connected_kbd_name, 0, sizeof(connected_kbd_name));
 
     state = STATE_SCANNING;
 #ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME

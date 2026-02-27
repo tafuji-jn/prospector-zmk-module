@@ -10,6 +10,11 @@ if(CONFIG_ZMK_STATUS_ADVERTISEMENT)
         target_sources(app PRIVATE src/status_advertisement.c)
 endif()
 
+# Add GATT-based status service (keyboard side)
+if(CONFIG_PROSPECTOR_STATUS_GATT_SERVICE)
+        target_sources(app PRIVATE src/status_gatt_service.c)
+endif()
+
 # Add scanner mode support
 if(CONFIG_PROSPECTOR_MODE_SCANNER)
         target_sources(app PRIVATE src/status_scanner.c)
