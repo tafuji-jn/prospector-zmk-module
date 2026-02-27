@@ -528,6 +528,7 @@ static void pending_update_timer_cb(lv_timer_t *timer) {
         }
 
         /* Process all updates in main thread - safe to call LVGL */
+        LOG_INF("LVGL update: layer=%d wpm=%d gatt=%d", data.layer, data.wpm, data.gatt_connected);
         display_update_device_name(data.device_name);
         display_update_layer(data.layer);
         display_update_wpm(data.wpm);

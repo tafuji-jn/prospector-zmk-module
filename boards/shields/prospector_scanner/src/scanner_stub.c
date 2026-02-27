@@ -466,7 +466,11 @@ int scanner_msg_send_keyboard_data(const struct zmk_status_adv_data *adv_data,
     /* Count advertisement reception for rate calculation */
     if (index == selected_keyboard) {
         atomic_inc(&adv_receive_count);
+        LOG_DBG("Display update scheduled: slot=%d layer=%d",
+                index, adv_data->active_layer);
         schedule_display_update();
+    } else {
+        LOG_DBG("Skipped display: slot=%d != selected=%d", index, selected_keyboard);
     }
 
     return 0;
