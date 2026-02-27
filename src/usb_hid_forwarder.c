@@ -16,11 +16,16 @@
 LOG_MODULE_REGISTER(usb_hid_fwd, CONFIG_ZMK_LOG_LEVEL);
 
 /*
- * DIAGNOSTIC: Minimal boot-style mouse to test if Windows accepts ANY mouse TLC.
- * 3 buttons + 8-bit X/Y only (no scroll). Known to work on all Windows versions.
- * If this works, incrementally add features to find what hidparse.sys rejects.
+ * Single HID interface with 3 Top-Level Collections (TLCs).
+ * Windows creates separate PDOs for each TLC automatically.
  *
- * Report IDs: 1=Keyboard, 2=Consumer, 3=Mouse
+ * IMPORTANT: CONFIG_ZMK_USB must be disabled (=n) in the dongle config,
+ * otherwise ZMK's usb_hid.c registers its own descriptor on HID_0 and
+ * overwrites wDescriptorLength, causing Windows to miss the Mouse TLC.
+ *
+ * Report ID 1: Keyboard (8-byte boot protocol compatible)
+ * Report ID 2: Consumer Control (2-byte usage code)
+ * Report ID 3: Mouse / Pointing Device (9-byte)
  */
 static const uint8_t hid_report_desc[] = {
     /* Keyboard */
@@ -77,34 +82,49 @@ static const uint8_t hid_report_desc[] = {
     0x81, 0x00,       /*   Input (Data, Array) */
     0xC0,             /* End Collection */
 
-    /* Mouse — MINIMAL: 3 buttons + 8-bit X/Y, no scroll */
+    /* Mouse / Pointing Device */
     0x05, 0x01,       /* Usage Page (Generic Desktop) */
     0x09, 0x02,       /* Usage (Mouse) */
     0xA1, 0x01,       /* Collection (Application) */
     0x85, 0x03,       /*   Report ID (3) */
     0x09, 0x01,       /*   Usage (Pointer) */
     0xA1, 0x00,       /*   Collection (Physical) */
-    /* 3 buttons */
+    /* Buttons (5 buttons) */
     0x05, 0x09,       /*     Usage Page (Button) */
-    0x19, 0x01,       /*     Usage Minimum (1) */
-    0x29, 0x03,       /*     Usage Maximum (3) */
+    0x19, 0x01,       /*     Usage Minimum (Button 1) */
+    0x29, 0x05,       /*     Usage Maximum (Button 5) */
     0x15, 0x00,       /*     Logical Minimum (0) */
     0x25, 0x01,       /*     Logical Maximum (1) */
-    0x95, 0x03,       /*     Report Count (3) */
     0x75, 0x01,       /*     Report Size (1) */
+    0x95, 0x05,       /*     Report Count (5) */
     0x81, 0x02,       /*     Input (Data, Variable, Absolute) */
-    /* 5-bit padding */
+    /* Padding (3 bits) */
+    0x75, 0x03,       /*     Report Size (3) */
     0x95, 0x01,       /*     Report Count (1) */
-    0x75, 0x05,       /*     Report Size (5) */
-    0x81, 0x01,       /*     Input (Constant) */
-    /* X, Y — 8-bit signed relative */
+    0x81, 0x03,       /*     Input (Constant, Variable, Absolute) */
+    /* X, Y (16-bit signed relative) */
     0x05, 0x01,       /*     Usage Page (Generic Desktop) */
     0x09, 0x30,       /*     Usage (X) */
     0x09, 0x31,       /*     Usage (Y) */
-    0x15, 0x81,       /*     Logical Minimum (-127) */
-    0x25, 0x7F,       /*     Logical Maximum (127) */
-    0x75, 0x08,       /*     Report Size (8) */
+    0x16, 0x00, 0x80, /*     Logical Minimum (-32768) */
+    0x26, 0xFF, 0x7F, /*     Logical Maximum (32767) */
+    0x75, 0x10,       /*     Report Size (16) */
     0x95, 0x02,       /*     Report Count (2) */
+    0x81, 0x06,       /*     Input (Data, Variable, Relative) */
+    /* Vertical scroll (16-bit to match BLE HID report from ZMK keyboard) */
+    0x09, 0x38,       /*     Usage (Wheel) */
+    0x16, 0x00, 0x80, /*     Logical Minimum (-32768) */
+    0x26, 0xFF, 0x7F, /*     Logical Maximum (32767) */
+    0x75, 0x10,       /*     Report Size (16) */
+    0x95, 0x01,       /*     Report Count (1) */
+    0x81, 0x06,       /*     Input (Data, Variable, Relative) */
+    /* Horizontal scroll (16-bit AC Pan to match BLE HID report) */
+    0x05, 0x0C,       /*     Usage Page (Consumer) */
+    0x0A, 0x38, 0x02, /*     Usage (AC Pan) */
+    0x16, 0x00, 0x80, /*     Logical Minimum (-32768) */
+    0x26, 0xFF, 0x7F, /*     Logical Maximum (32767) */
+    0x75, 0x10,       /*     Report Size (16) */
+    0x95, 0x01,       /*     Report Count (1) */
     0x81, 0x06,       /*     Input (Data, Variable, Relative) */
     0xC0,             /*   End Collection (Physical) */
     0xC0,             /* End Collection (Application) */
@@ -112,47 +132,6 @@ static const uint8_t hid_report_desc[] = {
 
 static const struct device *hid_dev;
 static bool usb_ready;
-
-/* Diagnostic: save wDescriptorLength immediately after usb_hid_init() */
-static uint16_t diag_wdl_at_init;
-static uint16_t diag_wdl_after_enable;
-
-/* Delayed diagnostic work — CDC ACM needs ~3s to connect */
-static void diag_work_handler(struct k_work *work);
-static K_WORK_DELAYABLE_DEFINE(diag_work, diag_work_handler);
-
-static void diag_work_handler(struct k_work *work)
-{
-    printk("\n=== USB_HID_DIAG ===\n");
-    printk("sizeof(hid_report_desc)=%u\n",
-           (unsigned int)sizeof(hid_report_desc));
-
-    if (hid_dev) {
-        const struct usb_cfg_data *cfg = hid_dev->config;
-        const uint8_t *iface = cfg->interface_descriptor;
-        const uint8_t *hid_cd = iface + 9;
-        uint16_t w_now = hid_cd[7] | (hid_cd[8] << 8);
-
-        printk("wDescriptorLength: at_init=%u after_enable=%u now=%u (should=%u)\n",
-               diag_wdl_at_init, diag_wdl_after_enable, w_now,
-               (unsigned int)sizeof(hid_report_desc));
-
-        if (diag_wdl_at_init == sizeof(hid_report_desc) &&
-            w_now != sizeof(hid_report_desc)) {
-            printk("*** OVERWRITTEN after init! Something else called usb_hid_init()\n");
-        } else if (diag_wdl_at_init != sizeof(hid_report_desc)) {
-            printk("*** WRONG at init! usb_set_hid_report_size() wrote wrong value\n");
-        }
-
-        printk("HID class: %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-               hid_cd[0], hid_cd[1], hid_cd[2], hid_cd[3], hid_cd[4],
-               hid_cd[5], hid_cd[6], hid_cd[7], hid_cd[8]);
-        printk("IF desc: %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-               iface[0], iface[1], iface[2], iface[3], iface[4],
-               iface[5], iface[6], iface[7], iface[8]);
-    }
-    printk("=== END DIAG ===\n");
-}
 
 /* Callback when USB HID interrupt endpoint write completes */
 static void int_in_ready_cb(const struct device *dev)
@@ -218,14 +197,6 @@ int usb_hid_forwarder_init(void)
         return ret;
     }
 
-    /* Save wDescriptorLength immediately after usb_hid_init() */
-    {
-        const struct usb_cfg_data *cfg = hid_dev->config;
-        const uint8_t *iface = cfg->interface_descriptor;
-        const uint8_t *hid_cd = iface + 9;
-        diag_wdl_at_init = hid_cd[7] | (hid_cd[8] << 8);
-    }
-
     ret = usb_enable(usb_status_cb);
     if (ret == -EALREADY) {
         usb_ready = true;
@@ -236,17 +207,6 @@ int usb_hid_forwarder_init(void)
     } else {
         LOG_INF("USB_HID: USB enabled, waiting for host");
     }
-
-    /* Save wDescriptorLength after usb_enable() */
-    {
-        const struct usb_cfg_data *cfg = hid_dev->config;
-        const uint8_t *iface = cfg->interface_descriptor;
-        const uint8_t *hid_cd = iface + 9;
-        diag_wdl_after_enable = hid_cd[7] | (hid_cd[8] << 8);
-    }
-
-    /* Schedule diagnostic dump after 5s (CDC ACM needs time to connect) */
-    k_work_schedule(&diag_work, K_SECONDS(5));
 
     LOG_INF("USB_HID: forwarder initialized (ready=%d)", usb_ready);
     return 0;
