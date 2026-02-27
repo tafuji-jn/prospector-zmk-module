@@ -113,40 +113,40 @@ static const uint8_t hid_report_desc[] = {
 static const struct device *hid_dev;
 static bool usb_ready;
 
+/* Diagnostic: save wDescriptorLength immediately after usb_hid_init() */
+static uint16_t diag_wdl_at_init;
+static uint16_t diag_wdl_after_enable;
+
 /* Delayed diagnostic work — CDC ACM needs ~3s to connect */
 static void diag_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(diag_work, diag_work_handler);
 
 static void diag_work_handler(struct k_work *work)
 {
-    printk("\n=== USB_HID_DIAG (delayed) ===\n");
+    printk("\n=== USB_HID_DIAG ===\n");
     printk("sizeof(hid_report_desc)=%u\n",
            (unsigned int)sizeof(hid_report_desc));
-    printk("desc[0..5]=%02x %02x %02x %02x %02x %02x\n",
-           hid_report_desc[0], hid_report_desc[1], hid_report_desc[2],
-           hid_report_desc[3], hid_report_desc[4], hid_report_desc[5]);
-    {
-        unsigned int last = sizeof(hid_report_desc) - 1;
-        printk("desc[%u..%u]=%02x %02x %02x %02x %02x %02x\n",
-               last - 5, last,
-               hid_report_desc[last - 5], hid_report_desc[last - 4],
-               hid_report_desc[last - 3], hid_report_desc[last - 2],
-               hid_report_desc[last - 1], hid_report_desc[last]);
-    }
 
     if (hid_dev) {
         const struct usb_cfg_data *cfg = hid_dev->config;
         const uint8_t *iface = cfg->interface_descriptor;
-        /* HID class descriptor starts right after 9-byte interface desc */
         const uint8_t *hid_cd = iface + 9;
-        uint16_t w_desc_len = hid_cd[7] | (hid_cd[8] << 8);
-        printk("wDescriptorLength=%u (should=%u) %s\n",
-               w_desc_len, (unsigned int)sizeof(hid_report_desc),
-               w_desc_len == sizeof(hid_report_desc) ? "OK" : "MISMATCH!");
-        printk("HID class desc: %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+        uint16_t w_now = hid_cd[7] | (hid_cd[8] << 8);
+
+        printk("wDescriptorLength: at_init=%u after_enable=%u now=%u (should=%u)\n",
+               diag_wdl_at_init, diag_wdl_after_enable, w_now,
+               (unsigned int)sizeof(hid_report_desc));
+
+        if (diag_wdl_at_init == sizeof(hid_report_desc) &&
+            w_now != sizeof(hid_report_desc)) {
+            printk("*** OVERWRITTEN after init! Something else called usb_hid_init()\n");
+        } else if (diag_wdl_at_init != sizeof(hid_report_desc)) {
+            printk("*** WRONG at init! usb_set_hid_report_size() wrote wrong value\n");
+        }
+
+        printk("HID class: %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
                hid_cd[0], hid_cd[1], hid_cd[2], hid_cd[3], hid_cd[4],
                hid_cd[5], hid_cd[6], hid_cd[7], hid_cd[8]);
-        /* Also dump interface descriptor to verify bInterfaceProtocol */
         printk("IF desc: %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
                iface[0], iface[1], iface[2], iface[3], iface[4],
                iface[5], iface[6], iface[7], iface[8]);
@@ -218,8 +218,13 @@ int usb_hid_forwarder_init(void)
         return ret;
     }
 
-    /* Schedule diagnostic dump after 5s (CDC ACM needs time to connect) */
-    k_work_schedule(&diag_work, K_SECONDS(5));
+    /* Save wDescriptorLength immediately after usb_hid_init() */
+    {
+        const struct usb_cfg_data *cfg = hid_dev->config;
+        const uint8_t *iface = cfg->interface_descriptor;
+        const uint8_t *hid_cd = iface + 9;
+        diag_wdl_at_init = hid_cd[7] | (hid_cd[8] << 8);
+    }
 
     ret = usb_enable(usb_status_cb);
     if (ret == -EALREADY) {
@@ -231,6 +236,17 @@ int usb_hid_forwarder_init(void)
     } else {
         LOG_INF("USB_HID: USB enabled, waiting for host");
     }
+
+    /* Save wDescriptorLength after usb_enable() */
+    {
+        const struct usb_cfg_data *cfg = hid_dev->config;
+        const uint8_t *iface = cfg->interface_descriptor;
+        const uint8_t *hid_cd = iface + 9;
+        diag_wdl_after_enable = hid_cd[7] | (hid_cd[8] << 8);
+    }
+
+    /* Schedule diagnostic dump after 5s (CDC ACM needs time to connect) */
+    k_work_schedule(&diag_work, K_SECONDS(5));
 
     LOG_INF("USB_HID: forwarder initialized (ready=%d)", usb_ready);
     return 0;
