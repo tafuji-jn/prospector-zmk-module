@@ -761,6 +761,16 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
     if (name && strcmp(name, "Unknown") != 0) {
         strncpy(connected_kbd_name, name, sizeof(connected_kbd_name) - 1);
         connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
+    } else if (connected_kbd_name[0] == '\0') {
+        /* Bonded reconnection: name not yet known from scan response.
+         * Use target name as fallback. */
+#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
+        const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
+        if (target[0] != '\0') {
+            strncpy(connected_kbd_name, target, sizeof(connected_kbd_name) - 1);
+            connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
+        }
+#endif
     }
 
     /* Defer connection to work queue – bt_conn_le_create must NOT be

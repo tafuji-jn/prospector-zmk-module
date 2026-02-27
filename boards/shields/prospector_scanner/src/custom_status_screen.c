@@ -46,6 +46,7 @@ struct pending_display_data {
     volatile bool update_pending;
     volatile bool signal_update_pending;  /* Signal widget updates separately (1Hz) */
     volatile bool no_keyboards;           /* True when all keyboards timed out */
+    bool gatt_connected;                  /* True when status comes via GATT (dongle) */
     char device_name[MAX_NAME_LEN];
     int layer;
     int wpm;
@@ -66,6 +67,7 @@ extern bool scanner_get_pending_update(struct pending_display_data *out);
 extern bool scanner_is_signal_pending(void);
 extern volatile int8_t scanner_signal_rssi;
 extern volatile int32_t scanner_signal_rate_x100;  /* rate * 100 */
+extern volatile bool scanner_signal_gatt;           /* True when GATT connected */
 extern bool scanner_get_pending_battery(int *level);
 
 /* LVGL timer for processing pending updates in main thread */
@@ -545,34 +547,49 @@ static void pending_update_timer_cb(lv_timer_t *timer) {
     /* Check for pending signal update (separate from main data, updates at 1Hz) */
     /* Read globals directly and update display inline (avoid ALL float function params) */
     if (scanner_is_signal_pending()) {
+        bool is_gatt = scanner_signal_gatt;
         int8_t sig_rssi = scanner_signal_rssi;
         int32_t sig_rate_x100 = scanner_signal_rate_x100;
 
-        /* Update signal display INLINE (no function call with float param) */
-        rssi = sig_rssi;
-        rate_hz = (float)sig_rate_x100 / 100.0f;
-
-        uint8_t bars = rssi_to_bars(sig_rssi);
-        if (rssi_bar) {
-            lv_bar_set_value(rssi_bar, bars, LV_ANIM_OFF);
-            lv_obj_set_style_bg_color(rssi_bar, get_rssi_color(bars), LV_PART_INDICATOR);
-        }
-        if (rssi_label) {
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%ddBm", sig_rssi);
-            lv_label_set_text(rssi_label, buf);
-        }
-        if (rate_label) {
-            char buf[16];
-            if (sig_rate_x100 < 0) {
-                snprintf(buf, sizeof(buf), "-.--Hz");
-            } else {
-                /* Display from integer directly: rate_x100 / 100 . rate_x100 % 100 */
-                int whole = sig_rate_x100 / 100;
-                int frac = (sig_rate_x100 % 100) / 10;  /* One decimal place */
-                snprintf(buf, sizeof(buf), "%d.%dHz", whole, frac);
+        if (is_gatt) {
+            /* GATT connected: show connection status instead of scan signal */
+            if (rssi_bar) {
+                lv_bar_set_value(rssi_bar, 5, LV_ANIM_OFF);
+                lv_obj_set_style_bg_color(rssi_bar,
+                    lv_color_hex(0x00BFFF), LV_PART_INDICATOR);
             }
-            lv_label_set_text(rate_label, buf);
+            if (rssi_label) {
+                lv_label_set_text(rssi_label, "GATT");
+            }
+            if (rate_label) {
+                lv_label_set_text(rate_label, "Connected");
+            }
+        } else {
+            /* Advertisement scan: show RSSI and rate as before */
+            rssi = sig_rssi;
+            rate_hz = (float)sig_rate_x100 / 100.0f;
+
+            uint8_t bars = rssi_to_bars(sig_rssi);
+            if (rssi_bar) {
+                lv_bar_set_value(rssi_bar, bars, LV_ANIM_OFF);
+                lv_obj_set_style_bg_color(rssi_bar, get_rssi_color(bars), LV_PART_INDICATOR);
+            }
+            if (rssi_label) {
+                char buf[16];
+                snprintf(buf, sizeof(buf), "%ddBm", sig_rssi);
+                lv_label_set_text(rssi_label, buf);
+            }
+            if (rate_label) {
+                char buf[16];
+                if (sig_rate_x100 < 0) {
+                    snprintf(buf, sizeof(buf), "-.--Hz");
+                } else {
+                    int whole = sig_rate_x100 / 100;
+                    int frac = (sig_rate_x100 % 100) / 10;
+                    snprintf(buf, sizeof(buf), "%d.%dHz", whole, frac);
+                }
+                lv_label_set_text(rate_label, buf);
+            }
         }
     }
 

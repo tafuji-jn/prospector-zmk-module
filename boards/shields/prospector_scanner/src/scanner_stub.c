@@ -20,6 +20,10 @@
 #include <zmk/usb.h>
 #endif
 
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+#include <zmk/hid_central.h>
+#endif
+
 LOG_MODULE_REGISTER(scanner_handler, LOG_LEVEL_INF);
 
 /* External scanner start function (from status_scanner.c) */
@@ -68,6 +72,7 @@ struct pending_display_data {
     volatile bool no_keyboards;           /* True when all keyboards timed out */
 
     /* Cached data for LVGL update */
+    bool gatt_connected;              /* True when status comes via GATT (dongle) */
     char device_name[MAX_NAME_LEN];
     int layer;
     int wpm;
@@ -101,6 +106,7 @@ bool scanner_get_pending_update(struct pending_display_data *out) {
 /* Completely avoiding float function parameters */
 volatile int8_t scanner_signal_rssi = -100;
 volatile int32_t scanner_signal_rate_x100 = -100;  /* rate * 100, as integer */
+volatile bool scanner_signal_gatt = false;          /* True when GATT connected */
 
 /* Called by work handler to set signal data */
 static void set_signal_data(int8_t rssi, float rate_hz) {
@@ -278,6 +284,11 @@ static void display_update_work_handler(struct k_work *work) {
             name, data.active_layer, data.battery_level);
 
     /* Store data in pending structure - NO LVGL calls here! */
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+    pending_data.gatt_connected = hid_central_is_connected();
+#else
+    pending_data.gatt_connected = false;
+#endif
     strncpy(pending_data.device_name, name, MAX_NAME_LEN - 1);
     pending_data.device_name[MAX_NAME_LEN - 1] = '\0';
     pending_data.layer = data.active_layer;
@@ -331,6 +342,7 @@ static void display_update_work_handler(struct k_work *work) {
 
         /* Set signal data via global variables (avoids float pointer issues) */
         set_signal_data(rssi, avg_rate);
+        scanner_signal_gatt = pending_data.gatt_connected;
         pending_data.signal_update_pending = true;  /* Signal widget updates at 1Hz */
         rate_last_calc_time = now;
     }
