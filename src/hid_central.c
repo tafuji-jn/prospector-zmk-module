@@ -626,7 +626,7 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     }
 
     /* Restart scanning now that the connection is gone */
-    status_scanner_restart_scanning();
+    zmk_status_scanner_start();
 
     schedule_reconnect();
 }
@@ -862,7 +862,7 @@ static void connect_work_handler(struct k_work *work)
     if (err) {
         LOG_ERR("DONGLE: Connect failed: %d", err);
         state = STATE_IDLE;
-        status_scanner_restart_scanning();
+        zmk_status_scanner_start();
         schedule_reconnect();
     }
 }
@@ -912,7 +912,7 @@ static void reconnect_work_handler(struct k_work *work)
     if (err) {
         LOG_WRN("Reconnect failed: %d", err);
         state = STATE_IDLE;
-        status_scanner_restart_scanning();
+        zmk_status_scanner_start();
         schedule_reconnect();
     }
 }
@@ -939,14 +939,25 @@ static uint8_t status_notify_cb(struct bt_conn *conn,
         return BT_GATT_ITER_STOP;
     }
 
-    if (length != sizeof(struct zmk_status_adv_data)) {
-        LOG_WRN("Status notify: unexpected length %d (expected %d)",
+    if (length < sizeof(struct zmk_status_adv_data)) {
+        LOG_WRN("Status notify: too short %d (min %d)",
                 length, sizeof(struct zmk_status_adv_data));
         return BT_GATT_ITER_CONTINUE;
     }
 
     const struct zmk_status_adv_data *status_data = data;
     const bt_addr_le_t *addr = bt_conn_get_dst(conn);
+
+    /* Extract layer name from extended payload (after 26-byte base) */
+    const char *layer_name = NULL;
+    if (length > sizeof(struct zmk_status_adv_data)) {
+        const char *ext = (const char *)data + sizeof(struct zmk_status_adv_data);
+        size_t max_name = length - sizeof(struct zmk_status_adv_data);
+        /* Verify null termination within bounds */
+        if (memchr(ext, '\0', max_name) != NULL) {
+            layer_name = ext;
+        }
+    }
 
     /* Ensure name is available — last-resort fallback to target name */
     if (connected_kbd_name[0] == '\0') {
@@ -960,11 +971,12 @@ static uint8_t status_notify_cb(struct bt_conn *conn,
 #endif
     }
 
-    LOG_INF("GATT notify: layer=%d mod=0x%02x bat=%d%% name='%s'",
-            status_data->active_layer, status_data->modifier_flags,
+    LOG_INF("GATT notify: layer=%d(%s) mod=0x%02x bat=%d%% name='%s'",
+            status_data->active_layer, layer_name ? layer_name : "?",
+            status_data->modifier_flags,
             status_data->battery_level, connected_kbd_name);
 
-    status_scanner_update_from_gatt(addr, status_data, 0, connected_kbd_name);
+    status_scanner_update_from_gatt(addr, status_data, 0, connected_kbd_name, layer_name);
 
     return BT_GATT_ITER_CONTINUE;
 }
@@ -974,9 +986,7 @@ static void status_subscribe_cb(struct bt_conn *conn, uint8_t err,
 {
     if (err) {
         LOG_WRN("Status GATT subscribe failed: %d", err);
-        /* Fallback: restart scanning for advertisement-based updates */
-        LOG_INF("Falling back to BLE scanning for status updates");
-        status_scanner_restart_scanning();
+        LOG_WRN("Status GATT subscribe failed - display updates unavailable");
         return;
     }
 
@@ -992,9 +1002,7 @@ static uint8_t status_chr_disc_cb(struct bt_conn *conn,
                                    struct bt_gatt_discover_params *params)
 {
     if (!attr) {
-        LOG_WRN("Status characteristic NOT found");
-        LOG_INF("Falling back to BLE scanning for status updates");
-        status_scanner_restart_scanning();
+        LOG_WRN("Status characteristic NOT found - display updates unavailable");
         return BT_GATT_ITER_STOP;
     }
 
@@ -1010,8 +1018,7 @@ static uint8_t status_chr_disc_cb(struct bt_conn *conn,
 
     int err = bt_gatt_subscribe(conn, &status_sub_params);
     if (err) {
-        LOG_WRN("Status GATT subscribe start failed: %d", err);
-        status_scanner_restart_scanning();
+        LOG_WRN("Status GATT subscribe start failed: %d - display updates unavailable", err);
     }
 
     return BT_GATT_ITER_STOP;
@@ -1023,9 +1030,7 @@ static uint8_t status_svc_disc_cb(struct bt_conn *conn,
                                    struct bt_gatt_discover_params *params)
 {
     if (!attr) {
-        LOG_INF("Prospector Status GATT service not found (old firmware?)");
-        LOG_INF("Falling back to BLE scanning for status updates");
-        status_scanner_restart_scanning();
+        LOG_WRN("Prospector Status GATT service not found (old firmware?) - display updates unavailable");
         return BT_GATT_ITER_STOP;
     }
 
@@ -1044,8 +1049,7 @@ static uint8_t status_svc_disc_cb(struct bt_conn *conn,
 
     int err = bt_gatt_discover(conn, &status_chr_disc_params);
     if (err) {
-        LOG_WRN("Status char discovery failed: %d", err);
-        status_scanner_restart_scanning();
+        LOG_WRN("Status char discovery failed: %d - display updates unavailable", err);
     }
 
     return BT_GATT_ITER_STOP;
@@ -1062,8 +1066,7 @@ static void start_status_service_discovery(struct bt_conn *conn)
 
     int err = bt_gatt_discover(conn, &status_disc_params);
     if (err) {
-        LOG_WRN("Status service discovery start failed: %d", err);
-        status_scanner_restart_scanning();
+        LOG_WRN("Status service discovery start failed: %d - display updates unavailable", err);
     }
 }
 

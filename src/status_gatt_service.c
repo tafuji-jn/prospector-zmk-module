@@ -322,16 +322,69 @@ static void build_status_data(struct zmk_status_adv_data *out)
 }
 
 /* ------------------------------------------------------------------ */
+/* Layer name resolution                                              */
+/* ------------------------------------------------------------------ */
+
+#define GATT_STATUS_MAX_LAYER_NAME 12
+
+static const char *get_layer_name(uint8_t layer_idx) {
+#if defined(CONFIG_PROSPECTOR_LAYER_NAMES)
+    static char name_buf[GATT_STATUS_MAX_LAYER_NAME + 1];
+    const char *names = CONFIG_PROSPECTOR_LAYER_NAMES;
+    if (names[0] == '\0') {
+        goto fallback;
+    }
+
+    /* Parse comma-separated name at layer_idx position */
+    int idx = 0;
+    const char *start = names;
+    for (const char *p = names; ; p++) {
+        if (*p == ',' || *p == '\0') {
+            if (idx == layer_idx) {
+                int l = p - start;
+                if (l > GATT_STATUS_MAX_LAYER_NAME) {
+                    l = GATT_STATUS_MAX_LAYER_NAME;
+                }
+                memcpy(name_buf, start, l);
+                name_buf[l] = '\0';
+                return name_buf;
+            }
+            if (*p == '\0') {
+                break;
+            }
+            idx++;
+            start = p + 1;
+        }
+    }
+fallback:
+#endif
+    {
+        static char fb[4];
+        snprintf(fb, sizeof(fb), "L%d", layer_idx);
+        return fb;
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Read callback (for on-demand reads)                                */
 /* ------------------------------------------------------------------ */
+
+/* Extended buffer: 26-byte status + layer name (null-terminated) */
+static uint8_t gatt_buf[sizeof(struct zmk_status_adv_data) + GATT_STATUS_MAX_LAYER_NAME + 1];
 
 static ssize_t read_status_cb(struct bt_conn *conn,
                                const struct bt_gatt_attr *attr,
                                void *buf, uint16_t len, uint16_t offset)
 {
-    struct zmk_status_adv_data data;
-    build_status_data(&data);
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, &data, sizeof(data));
+    struct zmk_status_adv_data *data = (struct zmk_status_adv_data *)gatt_buf;
+    build_status_data(data);
+
+    const char *name = get_layer_name(data->active_layer);
+    size_t name_len = strlen(name) + 1; /* include null */
+    memcpy(gatt_buf + sizeof(struct zmk_status_adv_data), name, name_len);
+
+    size_t total = sizeof(struct zmk_status_adv_data) + name_len;
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, gatt_buf, total);
 }
 
 /* ------------------------------------------------------------------ */
@@ -358,11 +411,18 @@ static void send_status_notify(void)
         return;
     }
 
-    struct zmk_status_adv_data data;
-    build_status_data(&data);
+    /* Build 26-byte base + layer name extension */
+    static uint8_t notify_buf[sizeof(struct zmk_status_adv_data) + GATT_STATUS_MAX_LAYER_NAME + 1];
+    struct zmk_status_adv_data *data = (struct zmk_status_adv_data *)notify_buf;
+    build_status_data(data);
 
+    const char *name = get_layer_name(data->active_layer);
+    size_t name_len = strlen(name) + 1; /* include null */
+    memcpy(notify_buf + sizeof(struct zmk_status_adv_data), name, name_len);
+
+    size_t total = sizeof(struct zmk_status_adv_data) + name_len;
     int err = bt_gatt_notify(NULL, &prospector_status_svc.attrs[1],
-                              &data, sizeof(data));
+                              notify_buf, total);
     if (err && err != -ENOTCONN) {
         LOG_WRN("GATT notify failed: %d", err);
     }

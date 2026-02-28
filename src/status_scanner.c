@@ -527,7 +527,17 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
         net_buf_simple_pull(&buf_copy, len);
     }
     
-    // Process Prospector data if found
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+    /* Dongle mode: skip advertisement status parsing (GATT provides status data).
+     * Only forward to HID Central for device discovery/connection. */
+    if (type == BT_GAP_ADV_TYPE_ADV_IND ||
+        type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND ||
+        (type & BT_HCI_LE_ADV_EVT_TYPE_SCAN_RSP)) {
+        const char *cached_name = get_device_name(addr);
+        hid_central_on_scan_result(addr, rssi, type, buf, cached_name);
+    }
+#else
+    // Process Prospector data if found (Scanner mode only)
     if (prospector_data) {
         LOG_DBG("Central=%d%%, Peripheral=[%d,%d,%d], Layer=%d",
                prospector_data->battery_level, prospector_data->peripheral_battery[0],
@@ -538,7 +548,7 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
         // Get device name for the message
         const char *device_name = get_device_name(addr);
         int msg_ret = scanner_msg_send_keyboard_data(prospector_data, rssi, device_name,
-                                                     addr->a.val, addr->type);
+                                                     addr->a.val, addr->type, NULL);
         if (msg_ret != 0) {
             LOG_DBG("Message queue full, falling back to direct processing");
         }
@@ -546,19 +556,6 @@ static void scan_callback(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
         // TRANSITIONAL: Also process directly for backward compatibility
         // This will be removed once message processing is implemented in main task
         process_advertisement_with_name(prospector_data, rssi, addr);
-    }
-
-#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-    /* Forward to HID Central for dongle mode.
-     * ADV_IND/ADV_DIRECT_IND: connectable advertisement
-     * SCAN_RSP: scan response that carries the device name.
-     *   SCAN_RSP is a reply to our SCAN_REQ, which we only send
-     *   for connectable ADV_IND, so the device is connectable. */
-    if (type == BT_GAP_ADV_TYPE_ADV_IND ||
-        type == BT_GAP_ADV_TYPE_ADV_DIRECT_IND ||
-        (type & BT_HCI_LE_ADV_EVT_TYPE_SCAN_RSP)) {
-        const char *cached_name = get_device_name(addr);
-        hid_central_on_scan_result(addr, rssi, type, buf, cached_name);
     }
 #endif
 }
@@ -748,7 +745,8 @@ int zmk_status_scanner_get_primary_keyboard(void) {
 void status_scanner_update_from_gatt(const bt_addr_le_t *addr,
                                       const struct zmk_status_adv_data *data,
                                       int8_t rssi,
-                                      const char *device_name)
+                                      const char *device_name,
+                                      const char *layer_name)
 {
     if (scanner_lock(K_MSEC(5)) != 0) {
         LOG_DBG("GATT status update skipped - mutex busy");
@@ -798,11 +796,22 @@ void status_scanner_update_from_gatt(const bt_addr_le_t *addr,
         }
     }
 
+    /* Store layer name */
+    if (layer_name && layer_name[0] != '\0') {
+        strncpy(keyboards[index].layer_name, layer_name,
+                sizeof(keyboards[index].layer_name) - 1);
+        keyboards[index].layer_name[sizeof(keyboards[index].layer_name) - 1] = '\0';
+    } else {
+        snprintf(keyboards[index].layer_name, sizeof(keyboards[index].layer_name),
+                 "L%d", data->active_layer);
+    }
+
     scanner_unlock();
 
     /* Send to display via message queue */
     const char *name = device_name ? device_name : "Unknown";
-    scanner_msg_send_keyboard_data(data, rssi, name, addr->a.val, addr->type);
+    scanner_msg_send_keyboard_data(data, rssi, name, addr->a.val, addr->type,
+                                    keyboards[index].layer_name);
 
     if (high_priority_change) {
         scanner_trigger_high_priority_update();
@@ -828,21 +837,6 @@ void status_scanner_update_rssi(const bt_addr_le_t *addr, int8_t rssi)
     scanner_unlock();
 }
 
-int status_scanner_restart_scanning(void) {
-    struct bt_le_scan_param scan_param = {
-        .type = BT_LE_SCAN_TYPE_PASSIVE,
-        .options = BT_LE_SCAN_OPT_NONE,
-        .interval = BT_GAP_SCAN_FAST_INTERVAL,
-        .window = BT_GAP_SCAN_FAST_WINDOW,
-    };
-    int err = bt_le_scan_start(&scan_param, scan_callback);
-    if (err) {
-        LOG_WRN("Restart scanning failed: %d", err);
-    } else {
-        LOG_INF("Scanning restarted (passive) for Observer coexistence");
-    }
-    return err;
-}
 #endif
 
 // Initialize on system startup - use later priority to ensure BT is ready

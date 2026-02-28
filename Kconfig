@@ -146,6 +146,16 @@ config PROSPECTOR_STATUS_GATT_SERVICE
       To enable: add prospector-zmk-module to west.yml and set
       CONFIG_PROSPECTOR_STATUS_GATT_SERVICE=y in your keyboard .conf.
 
+config PROSPECTOR_LAYER_NAMES
+    string "Comma-separated layer names"
+    default ""
+    depends on PROSPECTOR_STATUS_GATT_SERVICE
+    help
+      Layer names for GATT status notification, comma-separated.
+      Example: "Main,Mouse,Scroll,Arrow,Num,Func,BT"
+      Empty = use "L0","L1",... format (backward compatible).
+      Max 10 characters per name recommended.
+
 config PROSPECTOR_MODE_SCANNER
     bool "Enable Prospector Scanner Mode"
     default n

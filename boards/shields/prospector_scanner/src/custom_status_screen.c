@@ -49,6 +49,7 @@ struct pending_display_data {
     bool gatt_connected;                  /* True when status comes via GATT (dongle) */
     char device_name[MAX_NAME_LEN];
     int layer;
+    char layer_name[16];                  /* Human-readable layer name */
     int wpm;
     bool usb_ready;
     bool ble_connected;
@@ -115,6 +116,7 @@ static void swipe_process_timer_cb(lv_timer_t *timer);
 /* Display update functions - called from pending_update_timer_cb */
 void display_update_device_name(const char *name);
 void display_update_layer(int layer);
+void display_update_layer_name(const char *name);
 void display_update_wpm(int wpm);
 void display_update_connection(bool usb_rdy, bool ble_conn, bool ble_bond, int profile);
 void display_update_modifiers(uint8_t mods);
@@ -166,6 +168,7 @@ static const char *mod_symbols[4] = {
 
 /* ========== Cached data (updated by scanner, preserved across screen transitions) ========== */
 static int active_layer = 0;
+static char cached_layer_name[16] = "";
 static int wpm_value = 0;
 #define MAX_KB_BATTERIES 4
 static int battery_values[MAX_KB_BATTERIES] = {0, 0, 0, 0};  /* Up to 4 keyboard batteries */
@@ -229,6 +232,7 @@ static lv_obj_t *ble_profile_label = NULL;
 static lv_obj_t *layer_title_label = NULL;
 static lv_obj_t *layer_labels[10] = {NULL};
 static lv_obj_t *layer_over_max_label = NULL;  /* Large number for over-max display */
+static lv_obj_t *layer_name_label = NULL;      /* Human-readable layer name display */
 static bool layer_mode_over_max = false;       /* true when active_layer >= max_layers */
 static int last_active_layer = -1;             /* Track previous layer for animations */
 
@@ -493,6 +497,7 @@ static void pending_update_timer_cb(lv_timer_t *timer) {
             /* Reset display to initial "Scanning..." state */
             display_update_device_name("Scanning...");
             display_update_layer(0);
+            display_update_layer_name("");
             display_update_wpm(0);
             display_update_connection(false, false, false, 0);
             display_update_modifiers(0);
@@ -531,6 +536,7 @@ static void pending_update_timer_cb(lv_timer_t *timer) {
         LOG_INF("LVGL update: '%s' layer=%d gatt=%d", data.device_name, data.layer, data.gatt_connected);
         display_update_device_name(data.device_name);
         display_update_layer(data.layer);
+        display_update_layer_name(data.layer_name);
         display_update_wpm(data.wpm);
         display_update_connection(data.usb_ready, data.ble_connected,
                                   data.ble_bonded, data.profile);
@@ -563,7 +569,7 @@ static void pending_update_timer_cb(lv_timer_t *timer) {
                 lv_label_set_text(rssi_label, "GATT");
             }
             if (rate_label) {
-                lv_label_set_text(rate_label, "Connected");
+                lv_label_set_text(rate_label, "Conn.");
             }
         } else {
             /* Advertisement scan: show RSSI and rate as before */
@@ -707,6 +713,15 @@ lv_obj_t *zmk_display_status_screen(void) {
         create_layer_list_widgets(screen, 105);
     }
     LOG_INF("[INIT] layer widget created");
+
+    /* ===== 5b. Layer Name Label (CENTER, y=140) ===== */
+    layer_name_label = lv_label_create(screen);
+    lv_obj_set_style_text_font(layer_name_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(layer_name_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_width(layer_name_label, 280);
+    lv_obj_set_style_text_align(layer_name_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(layer_name_label, cached_layer_name);
+    lv_obj_align(layer_name_label, LV_ALIGN_TOP_MID, 0, 140);
 
     /* ===== 6. Modifier Widget (CENTER, y=145) - NerdFont icons ===== */
     LOG_INF("[INIT] Creating modifier widget with NerdFont...");
@@ -1461,6 +1476,20 @@ void display_update_layer(int layer) {
     last_active_layer = layer;
 }
 
+void display_update_layer_name(const char *name) {
+    if (name && name[0] != '\0') {
+        strncpy(cached_layer_name, name, sizeof(cached_layer_name) - 1);
+        cached_layer_name[sizeof(cached_layer_name) - 1] = '\0';
+    }
+
+    if (!layer_name_label || current_screen != SCREEN_MAIN) {
+        return;
+    }
+
+    lv_label_set_text(layer_name_label, cached_layer_name);
+    lv_obj_set_style_text_color(layer_name_label, get_layer_color(active_layer), 0);
+}
+
 void display_update_wpm(int wpm) {
     wpm_value = wpm;  /* Cache for screen transitions */
     if (wpm_value_label) {
@@ -1782,6 +1811,7 @@ static void destroy_main_screen_widgets(void) {
         if (layer_labels[i]) { lv_obj_del(layer_labels[i]); layer_labels[i] = NULL; }
     }
     if (layer_over_max_label) { lv_obj_del(layer_over_max_label); layer_over_max_label = NULL; }
+    if (layer_name_label) { lv_obj_del(layer_name_label); layer_name_label = NULL; }
     /* Delete slide mode widgets */
     for (int i = 0; i < SLIDE_VISIBLE_COUNT; i++) {
         if (layer_slide_labels[i]) { lv_obj_del(layer_slide_labels[i]); layer_slide_labels[i] = NULL; }
@@ -1877,6 +1907,15 @@ static void create_main_screen_widgets(void) {
         layer_mode_over_max = false;
         create_layer_list_widgets(screen_obj, 105);
     }
+
+    /* Layer name label (below layer numbers) */
+    layer_name_label = lv_label_create(screen_obj);
+    lv_obj_set_style_text_font(layer_name_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(layer_name_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_width(layer_name_label, 280);
+    lv_obj_set_style_text_align(layer_name_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(layer_name_label, cached_layer_name);
+    lv_obj_align(layer_name_label, LV_ALIGN_TOP_MID, 0, 140);
 
     modifier_label = lv_label_create(screen_obj);
     lv_obj_set_style_text_font(modifier_label, &NerdFonts_Regular_40, 0);
@@ -1990,6 +2029,7 @@ static void create_main_screen_widgets(void) {
     display_update_wpm(wpm_value);
     display_update_connection(usb_ready, ble_connected, ble_bonded, ble_profile);
     display_update_layer(active_layer);
+    display_update_layer_name(cached_layer_name);
     display_update_modifiers(cached_modifiers);
 
     /* Force battery widget reposition based on cached values */

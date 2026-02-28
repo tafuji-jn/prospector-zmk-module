@@ -40,6 +40,7 @@ struct zmk_keyboard_status {
     uint8_t ble_addr[6];                   // BLE MAC address for unique identification
     uint8_t ble_addr_type;                 // BLE address type (public/random)
     enum zmk_status_source data_source;    // How status data is received
+    char layer_name[16];                   // Human-readable layer name from GATT
 };
 
 /**
@@ -118,16 +119,6 @@ int zmk_status_scanner_get_primary_keyboard(void);
 
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
 /**
- * @brief Restart BLE scanning in passive mode
- *
- * Used by the HID Central to resume Observer scanning after a BLE
- * connection is established, so advertisement reception continues.
- *
- * @return 0 on success, negative error code on failure
- */
-int status_scanner_restart_scanning(void);
-
-/**
  * @brief Update keyboard status from GATT notification data
  *
  * Called by hid_central.c when a Prospector Status GATT notification
@@ -142,7 +133,8 @@ int status_scanner_restart_scanning(void);
 void status_scanner_update_from_gatt(const bt_addr_le_t *addr,
                                       const struct zmk_status_adv_data *data,
                                       int8_t rssi,
-                                      const char *device_name);
+                                      const char *device_name,
+                                      const char *layer_name);
 
 /**
  * @brief Update RSSI for a connected keyboard

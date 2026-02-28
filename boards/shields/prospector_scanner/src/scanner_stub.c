@@ -52,6 +52,7 @@ struct keyboard_state {
     struct zmk_status_adv_data data;
     int8_t rssi;
     char name[MAX_NAME_LEN];
+    char layer_name[16];     // Human-readable layer name from GATT
     uint32_t last_seen;  // k_uptime_get_32()
     uint8_t ble_addr[6];     // BLE MAC address for unique identification
     uint8_t ble_addr_type;   // BLE address type
@@ -75,6 +76,7 @@ struct pending_display_data {
     bool gatt_connected;              /* True when status comes via GATT (dongle) */
     char device_name[MAX_NAME_LEN];
     int layer;
+    char layer_name[16];              /* Human-readable layer name */
     int wpm;
     bool usb_ready;
     bool ble_connected;
@@ -292,6 +294,21 @@ static void display_update_work_handler(struct k_work *work) {
     strncpy(pending_data.device_name, name, MAX_NAME_LEN - 1);
     pending_data.device_name[MAX_NAME_LEN - 1] = '\0';
     pending_data.layer = data.active_layer;
+    /* Get layer name from keyboard state (protected by data_mutex inside scanner_get_keyboard_data) */
+    if (k_mutex_lock(&data_mutex, K_MSEC(5)) == 0) {
+        if (keyboards[selected_keyboard].layer_name[0] != '\0') {
+            strncpy(pending_data.layer_name, keyboards[selected_keyboard].layer_name,
+                    sizeof(pending_data.layer_name) - 1);
+            pending_data.layer_name[sizeof(pending_data.layer_name) - 1] = '\0';
+        } else {
+            snprintf(pending_data.layer_name, sizeof(pending_data.layer_name),
+                     "L%d", data.active_layer);
+        }
+        k_mutex_unlock(&data_mutex);
+    } else {
+        snprintf(pending_data.layer_name, sizeof(pending_data.layer_name),
+                 "L%d", data.active_layer);
+    }
     pending_data.wpm = data.wpm_value;
     pending_data.usb_ready = (data.status_flags & ZMK_STATUS_FLAG_USB_HID_READY) != 0;
     pending_data.ble_connected = (data.status_flags & ZMK_STATUS_FLAG_BLE_CONNECTED) != 0;
@@ -368,7 +385,8 @@ static void schedule_display_update(void) {
 
 int scanner_msg_send_keyboard_data(const struct zmk_status_adv_data *adv_data,
                                    int8_t rssi, const char *device_name,
-                                   const uint8_t *ble_addr, uint8_t ble_addr_type) {
+                                   const uint8_t *ble_addr, uint8_t ble_addr_type,
+                                   const char *layer_name) {
     if (!mutex_initialized) {
         k_mutex_init(&data_mutex);
         mutex_initialized = true;
@@ -462,6 +480,16 @@ int scanner_msg_send_keyboard_data(const struct zmk_status_adv_data *adv_data,
         }
     } else if (keyboards[index].name[0] == '\0') {
         snprintf(keyboards[index].name, MAX_NAME_LEN, "Keyboard %d", index);
+    }
+
+    /* Store layer name */
+    if (layer_name && layer_name[0] != '\0') {
+        strncpy(keyboards[index].layer_name, layer_name,
+                sizeof(keyboards[index].layer_name) - 1);
+        keyboards[index].layer_name[sizeof(keyboards[index].layer_name) - 1] = '\0';
+    } else {
+        snprintf(keyboards[index].layer_name, sizeof(keyboards[index].layer_name),
+                 "L%d", adv_data->active_layer);
     }
 
     k_mutex_unlock(&data_mutex);
