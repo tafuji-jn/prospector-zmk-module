@@ -698,7 +698,7 @@ lv_obj_t *zmk_display_status_screen(void) {
     lv_obj_set_style_text_color(layer_title_label, lv_color_make(160, 160, 160), 0);
     lv_obj_set_style_text_opa(layer_title_label, LV_OPA_70, 0);
     lv_label_set_text(layer_title_label, "Layer");
-    lv_obj_align(layer_title_label, LV_ALIGN_TOP_MID, 0, 82);  /* 3px up */
+    lv_obj_align(layer_title_label, LV_ALIGN_TOP_MID, 0, 70);  /* 20px above layer numbers (y=90) */
 
     /* Create layer display - slide mode OR fixed mode (list/over-max) */
     if (ds_layer_slide_mode) {
@@ -1893,7 +1893,7 @@ static void create_main_screen_widgets(void) {
     lv_obj_set_style_text_font(layer_title_label, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(layer_title_label, lv_color_make(160, 160, 160), 0);
     lv_label_set_text(layer_title_label, "Layer");
-    lv_obj_align(layer_title_label, LV_ALIGN_TOP_MID, 0, 82);  /* 3px up */
+    lv_obj_align(layer_title_label, LV_ALIGN_TOP_MID, 0, 70);  /* 20px above layer numbers (y=90) */
 
     /* Create layer display - slide mode OR fixed mode (list/over-max) */
     if (ds_layer_slide_mode) {
