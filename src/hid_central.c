@@ -116,6 +116,12 @@ static struct bt_uuid_128 disc_uuid_status_chr =
 /* RSSI periodic update (1 Hz) */
 static struct k_work_delayable rssi_work;
 
+/* GATT READ polling (fallback when notifications don't arrive) */
+#define STATUS_POLL_INTERVAL_MS 1000
+static struct k_work_delayable status_poll_work;
+static struct bt_gatt_read_params status_read_params;
+static uint16_t status_chr_value_handle;  /* Cached characteristic value handle */
+
 /* Connected keyboard device name (captured during scan) */
 static char connected_kbd_name[32];
 
@@ -605,6 +611,7 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     /* Cancel any pending deferred discovery */
     k_work_cancel_delayable(&discovery_work);
     k_work_cancel_delayable(&rssi_work);
+    k_work_cancel_delayable(&status_poll_work);
 
     bt_conn_unref(kbd_conn);
     kbd_conn = NULL;
@@ -618,6 +625,7 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     /* Reset status service subscribe params */
     status_sub_params.value_handle = 0;
     status_svc_subscribed = false;
+    status_chr_value_handle = 0;
 
     /* Send empty keyboard report to release all keys */
     if (usb_hid_forwarder_is_ready()) {
@@ -992,7 +1000,10 @@ static void status_subscribe_cb(struct bt_conn *conn, uint8_t err,
     status_svc_subscribed = true;
     LOG_INF("Status GATT subscribed (handle 0x%04x) - scan-free status updates active",
             params->value_handle);
-    /* No need to restart scanning — GATT provides status data */
+
+    /* Start GATT READ polling as fallback (notifications may not arrive) */
+    k_work_schedule(&status_poll_work, K_MSEC(STATUS_POLL_INTERVAL_MS));
+    LOG_INF("Status GATT READ polling started (%d ms interval)", STATUS_POLL_INTERVAL_MS);
 }
 
 /* Phase 1 callback: discover Status characteristic within service */
@@ -1006,6 +1017,7 @@ static uint8_t status_chr_disc_cb(struct bt_conn *conn,
     }
 
     struct bt_gatt_chrc *chrc = (struct bt_gatt_chrc *)attr->user_data;
+    status_chr_value_handle = chrc->value_handle;
     LOG_INF("Status characteristic at 0x%04x", chrc->value_handle);
 
     /* Subscribe to notifications */
@@ -1089,6 +1101,78 @@ static void rssi_work_handler(struct k_work *work)
 }
 
 /* ------------------------------------------------------------------ */
+/* GATT READ polling (fallback for status updates)                    */
+/* ------------------------------------------------------------------ */
+
+static uint8_t status_read_cb(struct bt_conn *conn, uint8_t err,
+                               struct bt_gatt_read_params *params,
+                               const void *data, uint16_t length)
+{
+    if (err || !data) {
+        if (err) {
+            LOG_WRN("Status GATT read failed: %d", err);
+        }
+        return BT_GATT_ITER_STOP;
+    }
+
+    if (length < sizeof(struct zmk_status_adv_data)) {
+        LOG_WRN("Status read: too short %d (min %d)",
+                length, sizeof(struct zmk_status_adv_data));
+        return BT_GATT_ITER_STOP;
+    }
+
+    const struct zmk_status_adv_data *status_data = data;
+    const bt_addr_le_t *addr = bt_conn_get_dst(conn);
+
+    /* Extract layer name from extended payload */
+    const char *layer_name = NULL;
+    if (length > sizeof(struct zmk_status_adv_data)) {
+        const char *ext = (const char *)data + sizeof(struct zmk_status_adv_data);
+        size_t max_name = length - sizeof(struct zmk_status_adv_data);
+        if (memchr(ext, '\0', max_name) != NULL) {
+            layer_name = ext;
+        }
+    }
+
+    if (connected_kbd_name[0] == '\0') {
+#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
+        const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
+        if (target[0] != '\0') {
+            strncpy(connected_kbd_name, target, sizeof(connected_kbd_name) - 1);
+            connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
+        }
+#endif
+    }
+
+    LOG_DBG("GATT poll: layer=%d(%s) mod=0x%02x bat=%d%%",
+            status_data->active_layer, layer_name ? layer_name : "?",
+            status_data->modifier_flags, status_data->battery_level);
+
+    status_scanner_update_from_gatt(addr, status_data, 0, connected_kbd_name, layer_name);
+
+    return BT_GATT_ITER_STOP;
+}
+
+static void status_poll_work_handler(struct k_work *work)
+{
+    if (!kbd_conn || state != STATE_READY || status_chr_value_handle == 0) {
+        return;
+    }
+
+    status_read_params.func = status_read_cb;
+    status_read_params.handle_count = 1;
+    status_read_params.single.handle = status_chr_value_handle;
+    status_read_params.single.offset = 0;
+
+    int err = bt_gatt_read(kbd_conn, &status_read_params);
+    if (err) {
+        LOG_DBG("Status GATT read request failed: %d", err);
+    }
+
+    k_work_schedule(&status_poll_work, K_MSEC(STATUS_POLL_INTERVAL_MS));
+}
+
+/* ------------------------------------------------------------------ */
 /* Initialization                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -1097,6 +1181,7 @@ static int hid_central_init(void)
     k_work_init_delayable(&reconnect_work, reconnect_work_handler);
     k_work_init_delayable(&discovery_work, discovery_work_handler);
     k_work_init_delayable(&rssi_work, rssi_work_handler);
+    k_work_init_delayable(&status_poll_work, status_poll_work_handler);
     k_work_init(&connect_work, connect_work_handler);
     k_work_init(&hid_send_work, hid_send_work_handler);
     memset(connected_kbd_name, 0, sizeof(connected_kbd_name));

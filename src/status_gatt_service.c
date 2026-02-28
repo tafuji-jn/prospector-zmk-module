@@ -460,8 +460,10 @@ static void send_status_notify(void)
     size_t total = sizeof(struct zmk_status_adv_data) + name_len;
     int err = bt_gatt_notify(NULL, &prospector_status_svc.attrs[1],
                               notify_buf, total);
-    if (err && err != -ENOTCONN) {
-        LOG_WRN("GATT notify failed: %d", err);
+    if (err) {
+        LOG_WRN("GATT notify failed: %d (%s)", err,
+                err == -ENOTCONN ? "no subscriber conn" :
+                err == -ENOMEM ? "no buffers" : "unknown");
     }
 }
 
