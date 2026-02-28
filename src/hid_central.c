@@ -574,6 +574,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
         bt_conn_unref(kbd_conn);
         kbd_conn = NULL;
         state = STATE_IDLE;
+        zmk_status_scanner_start();
         schedule_reconnect();
         return;
     }
@@ -908,7 +909,7 @@ bool hid_central_is_connected(void)
 
 static void reconnect_work_handler(struct k_work *work)
 {
-    if (state != STATE_IDLE) {
+    if (state != STATE_IDLE && state != STATE_SCANNING) {
         return; /* Already connecting or connected */
     }
 
@@ -1208,7 +1209,13 @@ static int hid_central_init(void)
     k_work_init(&hid_send_work, hid_send_work_handler);
     memset(connected_kbd_name, 0, sizeof(connected_kbd_name));
 
-    state = STATE_SCANNING;
+    if (has_bonded_addr) {
+        state = STATE_IDLE;
+        k_work_schedule(&reconnect_work, K_MSEC(1000));
+        LOG_INF("DONGLE: bonded addr found, scheduling reconnect");
+    } else {
+        state = STATE_SCANNING;
+    }
 #ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
     LOG_INF("DONGLE: target='%s'", CONFIG_PROSPECTOR_DONGLE_TARGET_NAME);
 #endif

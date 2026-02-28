@@ -195,7 +195,7 @@ config PROSPECTOR_DONGLE_AUTO_RECONNECT
 config PROSPECTOR_DONGLE_RECONNECT_INTERVAL_MS
     int "Reconnection interval (ms)"
     range 1000 30000
-    default 5000
+    default 3000
     depends on PROSPECTOR_DONGLE_AUTO_RECONNECT
     help
       Interval between reconnection attempts in milliseconds.
