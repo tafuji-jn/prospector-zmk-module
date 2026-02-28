@@ -3413,7 +3413,7 @@ static void ks_dongle_create_bonded_list(void) {
 
         /* Status indicator dot */
         entry->status_icon = lv_label_create(entry->container);
-        lv_obj_set_style_text_font(entry->status_icon, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(entry->status_icon, &lv_font_montserrat_16, 0);
         lv_obj_align(entry->status_icon, LV_ALIGN_LEFT_MID, 8, 0);
         if (is_active && connected) {
             lv_label_set_text(entry->status_icon, LV_SYMBOL_OK);
@@ -3431,7 +3431,7 @@ static void ks_dongle_create_bonded_list(void) {
         const char *display_name = kbds[i].name[0] ? kbds[i].name : "Keyboard";
         lv_label_set_text(entry->name_label, display_name);
         lv_obj_set_style_text_color(entry->name_label, lv_color_white(), 0);
-        lv_obj_set_style_text_font(entry->name_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(entry->name_label, &lv_font_montserrat_16, 0);
         lv_obj_align(entry->name_label, LV_ALIGN_LEFT_MID, 28, 0);
 
         /* Status text */
@@ -3474,7 +3474,7 @@ static void ks_dongle_create_bonded_list(void) {
         lv_obj_t *add_lbl = lv_label_create(ks_add_new_btn);
         lv_label_set_text(add_lbl, LV_SYMBOL_PLUS " Add New");
         lv_obj_set_style_text_color(add_lbl, lv_color_hex(0x4A90E2), 0);
-        lv_obj_set_style_text_font(add_lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(add_lbl, &lv_font_montserrat_16, 0);
         lv_obj_center(add_lbl);
     }
 }
@@ -3504,7 +3504,7 @@ static void ks_dongle_create_pairing_screen(void) {
         /* No keyboards found yet */
         if (!ks_scanning_label) {
             ks_scanning_label = lv_label_create(screen_obj);
-            lv_obj_set_style_text_font(ks_scanning_label, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_font(ks_scanning_label, &lv_font_montserrat_16, 0);
             lv_obj_set_style_text_color(ks_scanning_label, lv_color_hex(0x808080), 0);
             lv_label_set_text(ks_scanning_label, "Scanning for keyboards...");
             lv_obj_align(ks_scanning_label, LV_ALIGN_CENTER, 0, 0);
@@ -3538,14 +3538,14 @@ static void ks_dongle_create_pairing_screen(void) {
         entry->status_icon = lv_label_create(entry->container);
         lv_label_set_text(entry->status_icon, LV_SYMBOL_BLUETOOTH);
         lv_obj_set_style_text_color(entry->status_icon, lv_color_hex(0x4A90E2), 0);
-        lv_obj_set_style_text_font(entry->status_icon, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(entry->status_icon, &lv_font_montserrat_16, 0);
         lv_obj_align(entry->status_icon, LV_ALIGN_LEFT_MID, 8, 0);
 
         /* Name */
         entry->name_label = lv_label_create(entry->container);
         lv_label_set_text(entry->name_label, disc[i].name);
         lv_obj_set_style_text_color(entry->name_label, lv_color_white(), 0);
-        lv_obj_set_style_text_font(entry->name_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(entry->name_label, &lv_font_montserrat_16, 0);
         lv_obj_align(entry->name_label, LV_ALIGN_LEFT_MID, 28, 0);
 
         /* RSSI */
