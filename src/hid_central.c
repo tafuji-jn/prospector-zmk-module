@@ -122,6 +122,9 @@ static struct k_work_delayable status_poll_work;
 static struct bt_gatt_read_params status_read_params;
 static uint16_t status_chr_value_handle;  /* Cached characteristic value handle */
 
+/* MTU exchange */
+static struct bt_gatt_exchange_params mtu_exchange_params;
+
 /* Connected keyboard device name (captured during scan) */
 static char connected_kbd_name[32];
 
@@ -550,6 +553,16 @@ static void subscribe_next_input_report(int idx)
 /* BLE connection callbacks                                           */
 /* ------------------------------------------------------------------ */
 
+static void mtu_exchange_cb(struct bt_conn *conn, uint8_t err,
+                             struct bt_gatt_exchange_params *params)
+{
+    if (err) {
+        LOG_WRN("MTU exchange failed: %d", err);
+    } else {
+        LOG_INF("MTU exchanged: %d", bt_gatt_get_mtu(conn));
+    }
+}
+
 static void connected_cb(struct bt_conn *conn, uint8_t err)
 {
     if (conn != kbd_conn) {
@@ -582,6 +595,15 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     }
 
     state = STATE_CONNECTING;
+
+    /* Exchange MTU to allow 26+ byte GATT notifications/reads.
+     * Default MTU=23 limits notification payload to 20 bytes,
+     * too small for zmk_status_adv_data (26 bytes). */
+    mtu_exchange_params.func = mtu_exchange_cb;
+    int mtu_err = bt_gatt_exchange_mtu(conn, &mtu_exchange_params);
+    if (mtu_err) {
+        LOG_WRN("MTU exchange request failed: %d", mtu_err);
+    }
 
     /* Request security – GATT discovery will start in security_changed_cb
      * because HID attributes require encryption to be visible. */
