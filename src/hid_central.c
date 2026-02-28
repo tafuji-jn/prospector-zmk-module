@@ -11,7 +11,6 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/sys/atomic.h>
 #include <zephyr/init.h>
 #include <zephyr/settings/settings.h>
 #include <psa/crypto.h>
@@ -176,9 +175,6 @@ static volatile uint8_t hid_q_head; /* written by BT RX thread */
 static volatile uint8_t hid_q_tail; /* read by work queue */
 static struct k_work hid_send_work;
 
-/* Keystroke counter for display effects (ECG heartbeat) */
-static atomic_t hid_keystroke_count = ATOMIC_INIT(0);
-
 static void hid_send_work_handler(struct k_work *work)
 {
     while (hid_q_tail != hid_q_head) {
@@ -210,13 +206,6 @@ static void forward_hid_report(uint8_t report_id, const uint8_t *data,
     uint8_t buf_len = 0;
 
     if (report_id == 1 && len == 8) {
-        /* Detect keypress for display effects (check keycodes in bytes 2-7) */
-        for (int i = 2; i < 8; i++) {
-            if (data[i] != 0) {
-                atomic_inc(&hid_keystroke_count);
-                break;
-            }
-        }
         buf[0] = 0x01;
         memcpy(&buf[1], data, 8);
         buf_len = 9;
@@ -911,11 +900,6 @@ static void connect_work_handler(struct k_work *work)
 bool hid_central_is_connected(void)
 {
     return state == STATE_READY;
-}
-
-uint32_t hid_central_consume_keystrokes(void)
-{
-    return (uint32_t)atomic_set(&hid_keystroke_count, 0);
 }
 
 /* ------------------------------------------------------------------ */

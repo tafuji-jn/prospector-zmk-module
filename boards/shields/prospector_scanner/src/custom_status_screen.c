@@ -36,9 +36,6 @@
 #include "fonts.h"  /* NerdFont declarations */
 #include "touch_handler.h"  /* For LVGL input device registration */
 #include "brightness_control.h"  /* For auto brightness sensor control */
-#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-#include <zmk/hid_central.h>  /* For keystroke detection (ECG heartbeat) */
-#endif
 
 LOG_MODULE_REGISTER(display_screen, LOG_LEVEL_INF);
 
@@ -115,9 +112,6 @@ static void create_keyboard_select_widgets(void);
 static void destroy_pong_wars_widgets(void);
 static void create_pong_wars_widgets(void);
 static void swipe_process_timer_cb(lv_timer_t *timer);
-#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-static void ecg_timer_cb(lv_timer_t *timer);
-#endif
 
 /* Display update functions - called from pending_update_timer_cb */
 void display_update_device_name(const char *name);
@@ -250,23 +244,6 @@ static int layer_slide_window_start = 0;  /* First visible layer number in the w
 
 /* Modifier - placeholder for now (no NerdFont in ZMK test) */
 static lv_obj_t *modifier_label = NULL;
-
-/* ECG Heartbeat - typing activity visualization (dongle mode only) */
-#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-#define ECG_POINT_COUNT  120  /* Number of points (2px spacing = 240px width) */
-#define ECG_BASELINE     15   /* Y baseline (middle of 30px height) */
-#define ECG_TIMER_MS     40   /* Update interval (~25fps) */
-
-static lv_obj_t *ecg_line = NULL;
-static lv_point_precise_t ecg_points[ECG_POINT_COUNT];
-static lv_timer_t *ecg_timer = NULL;
-static int ecg_spike_queue = 0;   /* Pending spikes to draw */
-static int ecg_spike_phase = 0;   /* Current phase within QRS complex */
-
-/* QRS complex waveform: baseline offsets (dip → sharp up → sharp down → recover) */
-static const int8_t ecg_qrs[] = {-2, -12, 5, -3, 0};
-#define ECG_QRS_LEN  (sizeof(ecg_qrs) / sizeof(ecg_qrs[0]))
-#endif
 
 /* Keyboard battery - array for up to 4 batteries */
 static lv_obj_t *kb_bat_bar[MAX_KB_BATTERIES] = {NULL};      /* Battery bars (connected) */
@@ -755,31 +732,6 @@ lv_obj_t *zmk_display_status_screen(void) {
     lv_label_set_text(modifier_label, "");  /* Empty initially */
     lv_obj_align(modifier_label, LV_ALIGN_TOP_MID, 0, 140);
     LOG_INF("[INIT] modifier widget created");
-
-    /* ===== 6b. ECG Heartbeat Line (dongle mode only) ===== */
-#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-    LOG_INF("[INIT] Creating ECG heartbeat widget...");
-    /* Initialize all points on the baseline */
-    for (int i = 0; i < ECG_POINT_COUNT; i++) {
-        ecg_points[i].x = i * 2;  /* 2px spacing → 240px total width */
-        ecg_points[i].y = ECG_BASELINE;
-    }
-    ecg_spike_queue = 0;
-    ecg_spike_phase = 0;
-
-    ecg_line = lv_line_create(screen);
-    lv_line_set_points(ecg_line, ecg_points, ECG_POINT_COUNT);
-    lv_obj_set_style_line_color(ecg_line, lv_color_hex(0x00CC66), 0);
-    lv_obj_set_style_line_width(ecg_line, 2, 0);
-    lv_obj_set_style_line_rounded(ecg_line, true, 0);
-    lv_obj_align(ecg_line, LV_ALIGN_TOP_MID, 0, 145);
-
-    /* Start ECG animation timer */
-    if (!ecg_timer) {
-        ecg_timer = lv_timer_create(ecg_timer_cb, ECG_TIMER_MS, NULL);
-    }
-    LOG_INF("[INIT] ECG heartbeat widget created");
-#endif
 
     /* ===== 7. Keyboard Battery (dynamic layout for 1-4 batteries) ===== */
     LOG_INF("[INIT] Creating keyboard battery widgets...");
@@ -1587,54 +1539,6 @@ void display_update_connection(bool usb_rdy, bool ble_conn, bool ble_bond, int p
     }
 }
 
-/* ===== ECG Heartbeat Timer (dongle mode only) ===== */
-#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-static void ecg_timer_cb(lv_timer_t *timer) {
-    ARG_UNUSED(timer);
-
-    if (!ecg_line || current_screen != SCREEN_MAIN) {
-        return;
-    }
-
-    /* Hide ECG when modifiers are active */
-    if (cached_modifiers != 0) {
-        return;
-    }
-
-    /* Shift all Y values left by one position */
-    for (int i = 0; i < ECG_POINT_COUNT - 1; i++) {
-        ecg_points[i].y = ecg_points[i + 1].y;
-    }
-
-    /* Consume new keystrokes */
-    uint32_t keys = hid_central_consume_keystrokes();
-    if (keys > 0 && ecg_spike_phase == 0) {
-        ecg_spike_queue += (int)keys;
-    }
-
-    /* Generate new rightmost point */
-    int new_y;
-    if (ecg_spike_phase > 0) {
-        /* Drawing QRS complex */
-        int idx = ECG_QRS_LEN - ecg_spike_phase;
-        new_y = ECG_BASELINE + ecg_qrs[idx];
-        ecg_spike_phase--;
-    } else if (ecg_spike_queue > 0) {
-        /* Start new QRS complex */
-        ecg_spike_queue--;
-        ecg_spike_phase = ECG_QRS_LEN - 1;
-        new_y = ECG_BASELINE + ecg_qrs[0];
-    } else {
-        /* Flat baseline */
-        new_y = ECG_BASELINE;
-    }
-
-    ecg_points[ECG_POINT_COUNT - 1].y = new_y;
-
-    lv_line_set_points(ecg_line, ecg_points, ECG_POINT_COUNT);
-}
-#endif /* CONFIG_PROSPECTOR_DONGLE_MODE */
-
 void display_update_modifiers(uint8_t mods) {
     cached_modifiers = mods;  /* Cache for screen transitions */
     if (modifier_label) {
@@ -1658,17 +1562,6 @@ void display_update_modifiers(uint8_t mods) {
         /* Empty string when no modifiers active */
         lv_label_set_text(modifier_label, mod_text);
     }
-
-#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-    /* Toggle ECG visibility based on modifier state */
-    if (ecg_line) {
-        if (mods == 0) {
-            lv_obj_remove_flag(ecg_line, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(ecg_line, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-#endif
 }
 
 /* Helper function to reposition battery widgets based on count */
@@ -1914,10 +1807,6 @@ static void destroy_main_screen_widgets(void) {
         if (kb_bat_bar[i]) { lv_obj_del(kb_bat_bar[i]); kb_bat_bar[i] = NULL; }
     }
     if (modifier_label) { lv_obj_del(modifier_label); modifier_label = NULL; }
-#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
-    if (ecg_timer) { lv_timer_del(ecg_timer); ecg_timer = NULL; }
-    if (ecg_line) { lv_obj_del(ecg_line); ecg_line = NULL; }
-#endif
     for (int i = 0; i < 10; i++) {
         if (layer_labels[i]) { lv_obj_del(layer_labels[i]); layer_labels[i] = NULL; }
     }
