@@ -646,9 +646,13 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
         LOG_ERR("Connection failed: %d", err);
         bt_conn_unref(kbd_conn);
         kbd_conn = NULL;
-        state = STATE_IDLE;
+        if (pairing_mode) {
+            state = STATE_SCANNING;
+        } else {
+            state = STATE_IDLE;
+            schedule_reconnect();
+        }
         zmk_status_scanner_start();
-        schedule_reconnect();
         return;
     }
 
@@ -1073,9 +1077,13 @@ static void connect_work_handler(struct k_work *work)
     err = bt_conn_le_create(&pending_addr, &create_param, &conn_param, &kbd_conn);
     if (err) {
         LOG_ERR("DONGLE: Connect failed: %d", err);
-        state = STATE_IDLE;
+        if (pairing_mode) {
+            state = STATE_SCANNING;
+        } else {
+            state = STATE_IDLE;
+            schedule_reconnect();
+        }
         zmk_status_scanner_start();
-        schedule_reconnect();
     }
 }
 
@@ -1090,6 +1098,11 @@ bool hid_central_is_connected(void)
 
 static void reconnect_work_handler(struct k_work *work)
 {
+    /* Never reconnect during pairing mode */
+    if (pairing_mode) {
+        return;
+    }
+
     if (state != STATE_IDLE && state != STATE_SCANNING) {
         return; /* Already connecting or connected */
     }
@@ -1447,8 +1460,10 @@ int hid_central_enter_pairing_mode(void)
     discovered_count = 0;
     memset(discovered_kbds, 0, sizeof(discovered_kbds));
 
-    /* Cancel any pending reconnect */
+    /* Cancel all pending connection work */
     k_work_cancel_delayable(&reconnect_work);
+    k_work_cancel(&connect_work);
+    pending_connect = false;
 
     /* Disconnect current keyboard (disconnected_cb will see pairing_mode=true) */
     if (kbd_conn) {
