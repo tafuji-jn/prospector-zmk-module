@@ -723,14 +723,14 @@ lv_obj_t *zmk_display_status_screen(void) {
     lv_label_set_text(layer_name_label, cached_layer_name);
     lv_obj_align(layer_name_label, LV_ALIGN_TOP_MID, 0, 140);
 
-    /* ===== 6. Modifier Widget (CENTER, y=145) - NerdFont icons ===== */
+    /* ===== 6. Modifier Widget (CENTER, y=160) - NerdFont icons ===== */
     LOG_INF("[INIT] Creating modifier widget with NerdFont...");
     modifier_label = lv_label_create(screen);
     lv_obj_set_style_text_font(modifier_label, &NerdFonts_Regular_40, 0);
     lv_obj_set_style_text_color(modifier_label, lv_color_white(), 0);
     lv_obj_set_style_text_letter_space(modifier_label, 10, 0);  /* Space between icons */
     lv_label_set_text(modifier_label, "");  /* Empty initially */
-    lv_obj_align(modifier_label, LV_ALIGN_TOP_MID, 0, 145);
+    lv_obj_align(modifier_label, LV_ALIGN_TOP_MID, 0, 160);
     LOG_INF("[INIT] modifier widget created");
 
     /* ===== 7. Keyboard Battery (dynamic layout for 1-4 batteries) ===== */
@@ -1922,7 +1922,7 @@ static void create_main_screen_widgets(void) {
     lv_obj_set_style_text_color(modifier_label, lv_color_white(), 0);
     lv_obj_set_style_text_letter_space(modifier_label, 10, 0);  /* Space between icons */
     lv_label_set_text(modifier_label, "");
-    lv_obj_align(modifier_label, LV_ALIGN_TOP_MID, 0, 145);
+    lv_obj_align(modifier_label, LV_ALIGN_TOP_MID, 0, 160);
 
     /* === Keyboard battery widgets (4 slots, dynamic layout) === */
     static const int16_t kb_x_offsets_2_r[] = {-70, 70, 0, 0};
