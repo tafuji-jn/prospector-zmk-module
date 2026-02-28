@@ -176,6 +176,15 @@ config PROSPECTOR_DONGLE_MODE
       Requires BT_CENTRAL, BT_GATT_CLIENT, BT_SMP to be enabled in conf file.
 
 
+config PROSPECTOR_DONGLE_MAX_BONDED
+    int "Maximum number of bonded keyboards"
+    range 1 5
+    default 3
+    depends on PROSPECTOR_DONGLE_MODE
+    help
+      Maximum number of keyboards that can be bonded simultaneously
+      in dongle mode. Must be <= CONFIG_BT_MAX_PAIRED.
+
 config PROSPECTOR_DONGLE_TARGET_NAME
     string "Target keyboard BLE name (empty = first HID device)"
     default ""

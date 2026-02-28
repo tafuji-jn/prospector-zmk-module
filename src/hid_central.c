@@ -64,9 +64,82 @@ enum central_state {
 static enum central_state state = STATE_IDLE;
 static struct bt_conn *kbd_conn;
 
-/* Bonded keyboard address (for reconnection) */
-static bt_addr_le_t bonded_addr;
-static bool has_bonded_addr;
+/* ------------------------------------------------------------------ */
+/* Multi-keyboard bonding state                                       */
+/* ------------------------------------------------------------------ */
+
+#define MAX_BONDED_KBD CONFIG_PROSPECTOR_DONGLE_MAX_BONDED
+
+struct bonded_kbd {
+    bt_addr_le_t addr;
+    char name[32];
+    bool valid;
+};
+
+static struct bonded_kbd bonded_kbds[MAX_BONDED_KBD];
+static int bonded_count;
+static int active_kbd_idx = -1;  /* Index of currently selected keyboard */
+
+/* Pairing mode state */
+static bool pairing_mode;
+
+#define MAX_DISCOVERED 5
+static struct {
+    bt_addr_le_t addr;
+    char name[32];
+    int8_t rssi;
+    bool valid;
+} discovered_kbds[MAX_DISCOVERED];
+static int discovered_count;
+
+/* Convenience macros replacing old single-bond variables */
+#define has_bonded_addr (bonded_count > 0 && active_kbd_idx >= 0)
+#define bonded_addr     (bonded_kbds[active_kbd_idx].addr)
+
+/* ------------------------------------------------------------------ */
+/* Settings persistence for keyboard names and active index            */
+/* ------------------------------------------------------------------ */
+
+static int dongle_settings_set(const char *name, size_t len,
+                               settings_read_cb read_cb, void *cb_arg)
+{
+    if (!strncmp(name, "active", 6)) {
+        if (len == sizeof(active_kbd_idx)) {
+            read_cb(cb_arg, &active_kbd_idx, sizeof(active_kbd_idx));
+        }
+        return 0;
+    }
+
+    /* Keys: "name/0", "name/1", ... */
+    if (!strncmp(name, "name/", 5)) {
+        int idx = name[5] - '0';
+        if (idx >= 0 && idx < MAX_BONDED_KBD) {
+            size_t to_read = len < sizeof(bonded_kbds[idx].name) - 1
+                             ? len : sizeof(bonded_kbds[idx].name) - 1;
+            memset(bonded_kbds[idx].name, 0, sizeof(bonded_kbds[idx].name));
+            read_cb(cb_arg, bonded_kbds[idx].name, to_read);
+        }
+        return 0;
+    }
+
+    return -ENOENT;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(dongle, "dongle", NULL,
+                               dongle_settings_set, NULL, NULL);
+
+static void save_bonded_name(int idx)
+{
+    char key[16];
+    snprintf(key, sizeof(key), "dongle/name/%d", idx);
+    settings_save_one(key, bonded_kbds[idx].name,
+                      strlen(bonded_kbds[idx].name) + 1);
+}
+
+static void save_active_index(void)
+{
+    settings_save_one("dongle/active", &active_kbd_idx, sizeof(active_kbd_idx));
+}
 
 /* GATT discovery state */
 struct hid_report_info {
@@ -693,13 +766,39 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
         }
     } else {
         LOG_INF("DONGLE: Security level %d", level);
-        bt_addr_le_copy(&bonded_addr, bt_conn_get_dst(conn));
-        has_bonded_addr = true;
+
+        /* Register this bond in bonded_kbds[] if new */
+        const bt_addr_le_t *dst = bt_conn_get_dst(conn);
+        int idx = -1;
+        for (int i = 0; i < bonded_count; i++) {
+            if (bt_addr_le_cmp(dst, &bonded_kbds[i].addr) == 0) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0 && bonded_count < MAX_BONDED_KBD) {
+            idx = bonded_count;
+            bt_addr_le_copy(&bonded_kbds[idx].addr, dst);
+            bonded_kbds[idx].valid = true;
+            bonded_count++;
+            LOG_INF("New bond added at index %d", idx);
+        }
+        if (idx >= 0) {
+            /* Save name captured during scan */
+            if (connected_kbd_name[0] != '\0') {
+                strncpy(bonded_kbds[idx].name, connected_kbd_name,
+                        sizeof(bonded_kbds[idx].name) - 1);
+                bonded_kbds[idx].name[sizeof(bonded_kbds[idx].name) - 1] = '\0';
+                save_bonded_name(idx);
+            }
+            active_kbd_idx = idx;
+            save_active_index();
+        }
+
         if (discover_after_security) {
             discover_after_security = false;
             k_work_schedule(&discovery_work, K_MSEC(500));
         }
-
     }
 }
 
@@ -765,6 +864,54 @@ static bool name_matches_target(const char *name)
 #endif
 }
 
+/* Helper: add a discovered keyboard during pairing mode scan */
+static void add_to_discovered(const bt_addr_le_t *addr, const char *name, int8_t rssi)
+{
+    /* Skip if already discovered */
+    for (int i = 0; i < discovered_count; i++) {
+        if (bt_addr_le_cmp(addr, &discovered_kbds[i].addr) == 0) {
+            /* Update RSSI and name */
+            discovered_kbds[i].rssi = rssi;
+            if (name && strcmp(name, "Unknown") != 0) {
+                strncpy(discovered_kbds[i].name, name,
+                        sizeof(discovered_kbds[i].name) - 1);
+                discovered_kbds[i].name[sizeof(discovered_kbds[i].name) - 1] = '\0';
+            }
+            return;
+        }
+    }
+
+    /* Skip if already bonded */
+    for (int i = 0; i < bonded_count; i++) {
+        if (bt_addr_le_cmp(addr, &bonded_kbds[i].addr) == 0) {
+            return;
+        }
+    }
+
+    if (discovered_count >= MAX_DISCOVERED) {
+        return;
+    }
+
+    bt_addr_le_copy(&discovered_kbds[discovered_count].addr, addr);
+    discovered_kbds[discovered_count].rssi = rssi;
+    discovered_kbds[discovered_count].valid = true;
+    if (name && strcmp(name, "Unknown") != 0) {
+        strncpy(discovered_kbds[discovered_count].name, name,
+                sizeof(discovered_kbds[discovered_count].name) - 1);
+        discovered_kbds[discovered_count].name[sizeof(discovered_kbds[discovered_count].name) - 1] = '\0';
+    } else {
+        char addr_str[BT_ADDR_LE_STR_LEN];
+        bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
+        snprintf(discovered_kbds[discovered_count].name,
+                 sizeof(discovered_kbds[discovered_count].name),
+                 "%s", addr_str);
+    }
+
+    LOG_INF("Discovered[%d]: %s rssi=%d", discovered_count,
+            discovered_kbds[discovered_count].name, rssi);
+    discovered_count++;
+}
+
 void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
                                 uint8_t type, struct net_buf_simple *buf,
                                 const char *name)
@@ -774,7 +921,16 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
         return;
     }
 
-    /* If we have a bonded address, prefer reconnecting to it */
+    /* Pairing mode: collect discovered HID keyboards */
+    if (pairing_mode) {
+        if (!is_hid_service_in_ad(buf) && !name_matches_target(name)) {
+            return;
+        }
+        add_to_discovered(addr, name, rssi);
+        return;
+    }
+
+    /* Normal mode: connect to selected bonded keyboard */
     if (has_bonded_addr) {
         if (bt_addr_le_cmp(addr, &bonded_addr) != 0) {
             return; /* Not our bonded keyboard */
@@ -1196,6 +1352,209 @@ static void status_poll_work_handler(struct k_work *work)
 }
 
 /* ------------------------------------------------------------------ */
+/* Multi-keyboard public API                                          */
+/* ------------------------------------------------------------------ */
+
+int hid_central_get_bonded_keyboards(struct bonded_keyboard_info *out, int max_count)
+{
+    int count = 0;
+    for (int i = 0; i < bonded_count && count < max_count; i++) {
+        if (!bonded_kbds[i].valid) {
+            continue;
+        }
+        bt_addr_le_copy(&out[count].addr, &bonded_kbds[i].addr);
+        strncpy(out[count].name, bonded_kbds[i].name, sizeof(out[count].name) - 1);
+        out[count].name[sizeof(out[count].name) - 1] = '\0';
+        out[count].valid = true;
+        count++;
+    }
+    return count;
+}
+
+int hid_central_get_active_index(void)
+{
+    return active_kbd_idx;
+}
+
+int hid_central_select_keyboard(int index)
+{
+    if (index < 0 || index >= bonded_count || !bonded_kbds[index].valid) {
+        return -EINVAL;
+    }
+
+    if (index == active_kbd_idx && state == STATE_READY) {
+        return 0; /* Already connected to this keyboard */
+    }
+
+    LOG_INF("Switching to keyboard[%d]: %s", index, bonded_kbds[index].name);
+
+    /* Disconnect current keyboard if connected */
+    if (kbd_conn) {
+        bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        /* disconnected_cb will clean up kbd_conn */
+    }
+
+    active_kbd_idx = index;
+    save_active_index();
+
+    /* Clear connected name so it gets repopulated */
+    if (bonded_kbds[index].name[0] != '\0') {
+        strncpy(connected_kbd_name, bonded_kbds[index].name,
+                sizeof(connected_kbd_name) - 1);
+        connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
+    } else {
+        memset(connected_kbd_name, 0, sizeof(connected_kbd_name));
+    }
+
+    /* Schedule reconnection to new keyboard */
+    state = STATE_IDLE;
+    k_work_schedule(&reconnect_work, K_MSEC(500));
+    return 0;
+}
+
+int hid_central_enter_pairing_mode(void)
+{
+    LOG_INF("Entering pairing mode");
+
+    /* Disconnect current keyboard */
+    if (kbd_conn) {
+        bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    }
+
+    pairing_mode = true;
+    discovered_count = 0;
+    memset(discovered_kbds, 0, sizeof(discovered_kbds));
+
+    /* Cancel any pending reconnect */
+    k_work_cancel_delayable(&reconnect_work);
+
+    /* Start scanning (via status_scanner) */
+    state = STATE_SCANNING;
+    zmk_status_scanner_start();
+
+    return 0;
+}
+
+void hid_central_exit_pairing_mode(void)
+{
+    LOG_INF("Exiting pairing mode");
+    pairing_mode = false;
+    discovered_count = 0;
+
+    /* If we had a selected keyboard, reconnect */
+    if (has_bonded_addr) {
+        state = STATE_IDLE;
+        schedule_reconnect();
+    } else {
+        state = STATE_SCANNING;
+    }
+}
+
+bool hid_central_is_pairing_mode(void)
+{
+    return pairing_mode;
+}
+
+int hid_central_get_discovered_keyboards(struct discovered_keyboard_info *out, int max_count)
+{
+    int count = 0;
+    for (int i = 0; i < discovered_count && count < max_count; i++) {
+        if (!discovered_kbds[i].valid) {
+            continue;
+        }
+        bt_addr_le_copy(&out[count].addr, &discovered_kbds[i].addr);
+        strncpy(out[count].name, discovered_kbds[i].name, sizeof(out[count].name) - 1);
+        out[count].name[sizeof(out[count].name) - 1] = '\0';
+        out[count].rssi = discovered_kbds[i].rssi;
+        count++;
+    }
+    return count;
+}
+
+int hid_central_pair_with(int discovered_index)
+{
+    if (discovered_index < 0 || discovered_index >= discovered_count ||
+        !discovered_kbds[discovered_index].valid) {
+        return -EINVAL;
+    }
+
+    LOG_INF("Pairing with discovered[%d]: %s", discovered_index,
+            discovered_kbds[discovered_index].name);
+
+    pairing_mode = false;
+
+    /* Capture name for the new bond */
+    strncpy(connected_kbd_name, discovered_kbds[discovered_index].name,
+            sizeof(connected_kbd_name) - 1);
+    connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
+
+    /* Initiate connection (security_changed_cb will handle bond registration) */
+    bt_addr_le_copy(&pending_addr, &discovered_kbds[discovered_index].addr);
+    pending_connect = true;
+    state = STATE_CONNECTING;
+    k_work_submit(&connect_work);
+
+    return 0;
+}
+
+int hid_central_unpair(int bonded_index)
+{
+    if (bonded_index < 0 || bonded_index >= bonded_count ||
+        !bonded_kbds[bonded_index].valid) {
+        return -EINVAL;
+    }
+
+    LOG_INF("Unpairing keyboard[%d]: %s", bonded_index,
+            bonded_kbds[bonded_index].name);
+
+    /* If this is the active keyboard, disconnect first */
+    if (bonded_index == active_kbd_idx && kbd_conn) {
+        bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    }
+
+    /* Remove bond from Zephyr */
+    int err = bt_unpair(BT_ID_DEFAULT, &bonded_kbds[bonded_index].addr);
+    if (err) {
+        LOG_WRN("bt_unpair failed: %d", err);
+    }
+
+    /* Remove from our array by shifting entries down */
+    for (int i = bonded_index; i < bonded_count - 1; i++) {
+        bonded_kbds[i] = bonded_kbds[i + 1];
+        /* Re-save shifted name */
+        save_bonded_name(i);
+    }
+    bonded_count--;
+    memset(&bonded_kbds[bonded_count], 0, sizeof(bonded_kbds[bonded_count]));
+
+    /* Clear old name slot */
+    char key[16];
+    snprintf(key, sizeof(key), "dongle/name/%d", bonded_count);
+    settings_delete(key);
+
+    /* Adjust active index */
+    if (bonded_count == 0) {
+        active_kbd_idx = -1;
+    } else if (bonded_index == active_kbd_idx) {
+        active_kbd_idx = 0;
+    } else if (bonded_index < active_kbd_idx) {
+        active_kbd_idx--;
+    }
+    save_active_index();
+
+    /* Reconnect to new active keyboard if any */
+    if (has_bonded_addr) {
+        state = STATE_IDLE;
+        schedule_reconnect();
+    } else {
+        state = STATE_SCANNING;
+        zmk_status_scanner_start();
+    }
+
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Initialization                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -1209,10 +1568,24 @@ static int hid_central_init(void)
     k_work_init(&hid_send_work, hid_send_work_handler);
     memset(connected_kbd_name, 0, sizeof(connected_kbd_name));
 
+    LOG_INF("DONGLE: %d bonded keyboards, active=%d", bonded_count, active_kbd_idx);
+
+    /* Validate active index after settings + bond restore */
+    if (active_kbd_idx >= bonded_count) {
+        active_kbd_idx = bonded_count > 0 ? 0 : -1;
+    }
+
     if (has_bonded_addr) {
+        /* Pre-fill connected_kbd_name from bonded name for display */
+        if (bonded_kbds[active_kbd_idx].name[0] != '\0') {
+            strncpy(connected_kbd_name, bonded_kbds[active_kbd_idx].name,
+                    sizeof(connected_kbd_name) - 1);
+            connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
+        }
         state = STATE_IDLE;
         k_work_schedule(&reconnect_work, K_MSEC(1000));
-        LOG_INF("DONGLE: bonded addr found, scheduling reconnect");
+        LOG_INF("DONGLE: bonded addr found, scheduling reconnect to [%d]",
+                active_kbd_idx);
     } else {
         state = STATE_SCANNING;
     }
@@ -1273,20 +1646,23 @@ static void test_psa_import(void)
     psa_reset_key_attributes(&attr);
 }
 
-/* Callback for bt_foreach_bond: restore bonded keyboard address */
+/* Callback for bt_foreach_bond: restore bonded keyboard addresses */
 static void bond_found_cb(const struct bt_bond_info *info, void *user_data)
 {
-    /* Use the first bond found as our keyboard address.
-     * This restores has_bonded_addr across reboots so we connect
-     * by address (not name), avoiding the wrong split half. */
-    if (!has_bonded_addr) {
-        bt_addr_le_copy(&bonded_addr, &info->addr);
-        has_bonded_addr = true;
-
-        char addr_str[BT_ADDR_LE_STR_LEN];
-        bt_addr_le_to_str(&bonded_addr, addr_str, sizeof(addr_str));
-        printk("*** DONGLE: Restored bond: %s ***\n", addr_str);
+    if (bonded_count >= MAX_BONDED_KBD) {
+        return;
     }
+
+    bt_addr_le_copy(&bonded_kbds[bonded_count].addr, &info->addr);
+    bonded_kbds[bonded_count].valid = true;
+    /* name is restored by settings_load via dongle_settings_set */
+
+    char addr_str[BT_ADDR_LE_STR_LEN];
+    bt_addr_le_to_str(&info->addr, addr_str, sizeof(addr_str));
+    printk("*** DONGLE: Restored bond[%d]: %s name='%s' ***\n",
+           bonded_count, addr_str, bonded_kbds[bonded_count].name);
+
+    bonded_count++;
 }
 
 #if !IS_ENABLED(CONFIG_ZMK_BLE)

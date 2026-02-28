@@ -36,6 +36,9 @@
 #include "fonts.h"  /* NerdFont declarations */
 #include "touch_handler.h"  /* For LVGL input device registration */
 #include "brightness_control.h"  /* For auto brightness sensor control */
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+#include <zmk/hid_central.h>
+#endif
 
 LOG_MODULE_REGISTER(display_screen, LOG_LEVEL_INF);
 
@@ -365,6 +368,47 @@ static lv_color_t get_channel_color(uint8_t channel) {
         default: return lv_color_hex(0x808080); /* Default gray for Ch0/All */
     }
 }
+
+/* ========== Dongle Mode Keyboard Select State ========== */
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+
+static bool ks_dongle_pairing_mode = false;   /* Currently showing pairing screen */
+static lv_obj_t *ks_add_new_btn = NULL;       /* "+ Add New" button */
+static lv_obj_t *ks_back_btn = NULL;          /* "< Back" button in pairing mode */
+static lv_obj_t *ks_scanning_label = NULL;    /* "Scanning..." label */
+
+/* Long-press delete confirmation */
+static lv_obj_t *ks_delete_overlay = NULL;
+static int ks_delete_target_index = -1;
+
+/* Dongle keyboard entry: bonded or discovered */
+struct ks_dongle_entry {
+    lv_obj_t *container;
+    lv_obj_t *status_icon;    /* ● or ○ */
+    lv_obj_t *name_label;
+    lv_obj_t *status_label;   /* [Connected] / [Connecting...] / rssi */
+    int index;                /* bonded_index or discovered_index */
+};
+
+#define KS_DONGLE_MAX_ENTRIES 5
+static struct ks_dongle_entry ks_dongle_entries[KS_DONGLE_MAX_ENTRIES] = {0};
+static int ks_dongle_entry_count = 0;
+
+/* Forward declarations for dongle mode */
+static void ks_dongle_entry_click_cb(lv_event_t *e);
+static void ks_dongle_entry_longpress_cb(lv_event_t *e);
+static void ks_dongle_add_new_cb(lv_event_t *e);
+static void ks_dongle_back_cb(lv_event_t *e);
+static void ks_dongle_discovered_click_cb(lv_event_t *e);
+static void ks_dongle_delete_yes_cb(lv_event_t *e);
+static void ks_dongle_delete_no_cb(lv_event_t *e);
+static void ks_dongle_close_delete_overlay(void);
+static void ks_dongle_update_entries(void);
+static void ks_dongle_create_bonded_list(void);
+static void ks_dongle_create_pairing_screen(void);
+static void ks_dongle_destroy_entries(void);
+
+#endif /* CONFIG_PROSPECTOR_DONGLE_MODE */
 
 /* Channel functions - try to use system_settings_widget.c version if available */
 __attribute__((weak)) uint8_t scanner_get_runtime_channel(void) {
@@ -3189,6 +3233,356 @@ static void ks_update_entries(void) {
     }
 }
 
+/* ========== Dongle Mode Keyboard Select Implementation ========== */
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+
+static void ks_dongle_destroy_entries(void) {
+    for (int i = 0; i < ks_dongle_entry_count; i++) {
+        if (ks_dongle_entries[i].container) {
+            lv_obj_del(ks_dongle_entries[i].container);
+        }
+    }
+    memset(ks_dongle_entries, 0, sizeof(ks_dongle_entries));
+    ks_dongle_entry_count = 0;
+}
+
+static void ks_dongle_close_delete_overlay(void) {
+    if (ks_delete_overlay) {
+        lv_obj_del(ks_delete_overlay);
+        ks_delete_overlay = NULL;
+    }
+    ks_delete_target_index = -1;
+}
+
+static void ks_dongle_delete_yes_cb(lv_event_t *e) {
+    int idx = ks_delete_target_index;
+    ks_dongle_close_delete_overlay();
+    if (idx >= 0) {
+        hid_central_unpair(idx);
+        ks_dongle_update_entries();
+    }
+}
+
+static void ks_dongle_delete_no_cb(lv_event_t *e) {
+    ks_dongle_close_delete_overlay();
+}
+
+static void ks_dongle_show_delete_confirm(int bonded_index, const char *name) {
+    ks_dongle_close_delete_overlay();
+    ks_delete_target_index = bonded_index;
+
+    /* Red overlay */
+    ks_delete_overlay = lv_obj_create(screen_obj);
+    lv_obj_set_size(ks_delete_overlay, 220, 100);
+    lv_obj_align(ks_delete_overlay, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(ks_delete_overlay, lv_color_hex(0x331111), 0);
+    lv_obj_set_style_bg_opa(ks_delete_overlay, LV_OPA_90, 0);
+    lv_obj_set_style_radius(ks_delete_overlay, 12, 0);
+    lv_obj_set_style_border_color(ks_delete_overlay, lv_color_hex(0xFF3333), 0);
+    lv_obj_set_style_border_width(ks_delete_overlay, 2, 0);
+    lv_obj_set_style_pad_all(ks_delete_overlay, 10, 0);
+    lv_obj_clear_flag(ks_delete_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* "Delete <name>?" */
+    lv_obj_t *msg = lv_label_create(ks_delete_overlay);
+    char buf[48];
+    snprintf(buf, sizeof(buf), "Delete %s?", name);
+    lv_label_set_text(msg, buf);
+    lv_obj_set_style_text_color(msg, lv_color_hex(0xFF6666), 0);
+    lv_obj_set_style_text_font(msg, &lv_font_montserrat_16, 0);
+    lv_obj_align(msg, LV_ALIGN_TOP_MID, 0, 5);
+
+    /* Yes button */
+    lv_obj_t *yes_btn = lv_btn_create(ks_delete_overlay);
+    lv_obj_set_size(yes_btn, 70, 32);
+    lv_obj_align(yes_btn, LV_ALIGN_BOTTOM_LEFT, 15, -5);
+    lv_obj_set_style_bg_color(yes_btn, lv_color_hex(0xCC3333), 0);
+    lv_obj_set_style_shadow_width(yes_btn, 0, 0);
+    lv_obj_add_event_cb(yes_btn, ks_dongle_delete_yes_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *yes_lbl = lv_label_create(yes_btn);
+    lv_label_set_text(yes_lbl, "Yes");
+    lv_obj_center(yes_lbl);
+
+    /* No button */
+    lv_obj_t *no_btn = lv_btn_create(ks_delete_overlay);
+    lv_obj_set_size(no_btn, 70, 32);
+    lv_obj_align(no_btn, LV_ALIGN_BOTTOM_RIGHT, -15, -5);
+    lv_obj_set_style_bg_color(no_btn, lv_color_hex(0x404040), 0);
+    lv_obj_set_style_shadow_width(no_btn, 0, 0);
+    lv_obj_add_event_cb(no_btn, ks_dongle_delete_no_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *no_lbl = lv_label_create(no_btn);
+    lv_label_set_text(no_lbl, "No");
+    lv_obj_center(no_lbl);
+}
+
+/* Click handler for bonded keyboard entry */
+static void ks_dongle_entry_click_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    LOG_INF("Dongle keyboard selected: bonded[%d]", idx);
+    hid_central_select_keyboard(idx);
+}
+
+/* Long-press handler for bonded keyboard entry (delete) */
+static void ks_dongle_entry_longpress_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    struct bonded_keyboard_info kbds[CONFIG_PROSPECTOR_DONGLE_MAX_BONDED];
+    int count = hid_central_get_bonded_keyboards(kbds, CONFIG_PROSPECTOR_DONGLE_MAX_BONDED);
+    if (idx >= 0 && idx < count) {
+        LOG_INF("Long-press on bonded[%d]: %s", idx, kbds[idx].name);
+        ks_dongle_show_delete_confirm(idx, kbds[idx].name);
+    }
+}
+
+/* Click on "+ Add New" */
+static void ks_dongle_add_new_cb(lv_event_t *e) {
+    LOG_INF("Entering pairing mode");
+    ks_dongle_pairing_mode = true;
+    hid_central_enter_pairing_mode();
+    /* Rebuild the screen */
+    ks_dongle_destroy_entries();
+    if (ks_add_new_btn) { lv_obj_del(ks_add_new_btn); ks_add_new_btn = NULL; }
+    ks_dongle_create_pairing_screen();
+}
+
+/* Click on "< Back" in pairing mode */
+static void ks_dongle_back_cb(lv_event_t *e) {
+    LOG_INF("Exiting pairing mode");
+    ks_dongle_pairing_mode = false;
+    hid_central_exit_pairing_mode();
+    /* Rebuild the bonded list */
+    ks_dongle_destroy_entries();
+    if (ks_back_btn) { lv_obj_del(ks_back_btn); ks_back_btn = NULL; }
+    if (ks_scanning_label) { lv_obj_del(ks_scanning_label); ks_scanning_label = NULL; }
+    ks_dongle_create_bonded_list();
+}
+
+/* Click on a discovered keyboard during pairing */
+static void ks_dongle_discovered_click_cb(lv_event_t *e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    LOG_INF("Pairing with discovered[%d]", idx);
+    hid_central_pair_with(idx);
+    /* Switch back to bonded view after pairing initiated */
+    ks_dongle_pairing_mode = false;
+    ks_dongle_destroy_entries();
+    if (ks_back_btn) { lv_obj_del(ks_back_btn); ks_back_btn = NULL; }
+    if (ks_scanning_label) { lv_obj_del(ks_scanning_label); ks_scanning_label = NULL; }
+    ks_dongle_create_bonded_list();
+}
+
+/* Create bonded keyboard list (dongle mode main view) */
+static void ks_dongle_create_bonded_list(void) {
+    struct bonded_keyboard_info kbds[CONFIG_PROSPECTOR_DONGLE_MAX_BONDED];
+    int count = hid_central_get_bonded_keyboards(kbds, CONFIG_PROSPECTOR_DONGLE_MAX_BONDED);
+    int active = hid_central_get_active_index();
+    bool connected = hid_central_is_connected();
+
+    ks_dongle_destroy_entries();
+
+    int y_pos = 45;
+    int spacing = 40;
+
+    for (int i = 0; i < count && i < KS_DONGLE_MAX_ENTRIES; i++) {
+        struct ks_dongle_entry *entry = &ks_dongle_entries[i];
+        entry->index = i;
+
+        /* Container */
+        entry->container = lv_obj_create(screen_obj);
+        lv_obj_set_size(entry->container, 250, 34);
+        lv_obj_set_pos(entry->container, 15, y_pos + (i * spacing));
+        lv_obj_set_style_bg_opa(entry->container, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(entry->container, 6, 0);
+        lv_obj_set_style_pad_all(entry->container, 0, 0);
+        lv_obj_add_flag(entry->container, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(entry->container, LV_OBJ_FLAG_SCROLLABLE);
+
+        /* Selection/connection styling */
+        bool is_active = (i == active);
+        if (is_active && connected) {
+            lv_obj_set_style_bg_color(entry->container, lv_color_hex(0x1A3A1A), 0);
+            lv_obj_set_style_border_color(entry->container, lv_color_hex(0x00CC66), 0);
+            lv_obj_set_style_border_width(entry->container, 2, 0);
+        } else if (is_active) {
+            lv_obj_set_style_bg_color(entry->container, lv_color_hex(0x2A4A6A), 0);
+            lv_obj_set_style_border_color(entry->container, lv_color_hex(0x4A90E2), 0);
+            lv_obj_set_style_border_width(entry->container, 2, 0);
+        } else {
+            lv_obj_set_style_bg_color(entry->container, lv_color_hex(0x1A1A1A), 0);
+            lv_obj_set_style_border_color(entry->container, lv_color_hex(0x303030), 0);
+            lv_obj_set_style_border_width(entry->container, 1, 0);
+        }
+
+        /* Status indicator dot */
+        entry->status_icon = lv_label_create(entry->container);
+        lv_obj_set_style_text_font(entry->status_icon, &lv_font_montserrat_14, 0);
+        lv_obj_align(entry->status_icon, LV_ALIGN_LEFT_MID, 8, 0);
+        if (is_active && connected) {
+            lv_label_set_text(entry->status_icon, LV_SYMBOL_OK);
+            lv_obj_set_style_text_color(entry->status_icon, lv_color_hex(0x00CC66), 0);
+        } else if (is_active) {
+            lv_label_set_text(entry->status_icon, LV_SYMBOL_REFRESH);
+            lv_obj_set_style_text_color(entry->status_icon, lv_color_hex(0xFFCC00), 0);
+        } else {
+            lv_label_set_text(entry->status_icon, LV_SYMBOL_BLUETOOTH);
+            lv_obj_set_style_text_color(entry->status_icon, lv_color_hex(0x606060), 0);
+        }
+
+        /* Name label */
+        entry->name_label = lv_label_create(entry->container);
+        const char *display_name = kbds[i].name[0] ? kbds[i].name : "Keyboard";
+        lv_label_set_text(entry->name_label, display_name);
+        lv_obj_set_style_text_color(entry->name_label, lv_color_white(), 0);
+        lv_obj_set_style_text_font(entry->name_label, &lv_font_montserrat_14, 0);
+        lv_obj_align(entry->name_label, LV_ALIGN_LEFT_MID, 28, 0);
+
+        /* Status text */
+        entry->status_label = lv_label_create(entry->container);
+        lv_obj_set_style_text_font(entry->status_label, &lv_font_montserrat_12, 0);
+        lv_obj_align(entry->status_label, LV_ALIGN_RIGHT_MID, -8, 0);
+        if (is_active && connected) {
+            lv_label_set_text(entry->status_label, "Connected");
+            lv_obj_set_style_text_color(entry->status_label, lv_color_hex(0x00CC66), 0);
+        } else if (is_active) {
+            lv_label_set_text(entry->status_label, "Connecting...");
+            lv_obj_set_style_text_color(entry->status_label, lv_color_hex(0xFFCC00), 0);
+        } else {
+            lv_label_set_text(entry->status_label, "");
+        }
+
+        /* Click to select */
+        lv_obj_add_event_cb(entry->container, ks_dongle_entry_click_cb,
+                           LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        /* Long-press to delete */
+        lv_obj_add_event_cb(entry->container, ks_dongle_entry_longpress_cb,
+                           LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
+
+        ks_dongle_entry_count++;
+    }
+
+    /* "+ Add New" button */
+    if (!ks_add_new_btn) {
+        ks_add_new_btn = lv_btn_create(screen_obj);
+        lv_obj_set_size(ks_add_new_btn, 140, 32);
+        lv_obj_set_pos(ks_add_new_btn, 15, y_pos + (count * spacing) + 10);
+        lv_obj_set_style_bg_color(ks_add_new_btn, lv_color_hex(0x2A2A2A), 0);
+        lv_obj_set_style_bg_opa(ks_add_new_btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(ks_add_new_btn, 6, 0);
+        lv_obj_set_style_border_color(ks_add_new_btn, lv_color_hex(0x4A90E2), 0);
+        lv_obj_set_style_border_width(ks_add_new_btn, 1, 0);
+        lv_obj_set_style_shadow_width(ks_add_new_btn, 0, 0);
+        lv_obj_add_event_cb(ks_add_new_btn, ks_dongle_add_new_cb, LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t *add_lbl = lv_label_create(ks_add_new_btn);
+        lv_label_set_text(add_lbl, LV_SYMBOL_PLUS " Add New");
+        lv_obj_set_style_text_color(add_lbl, lv_color_hex(0x4A90E2), 0);
+        lv_obj_set_style_text_font(add_lbl, &lv_font_montserrat_14, 0);
+        lv_obj_center(add_lbl);
+    }
+}
+
+/* Create pairing mode screen (discovered keyboards) */
+static void ks_dongle_create_pairing_screen(void) {
+    struct discovered_keyboard_info disc[KS_DONGLE_MAX_ENTRIES];
+    int count = hid_central_get_discovered_keyboards(disc, KS_DONGLE_MAX_ENTRIES);
+
+    ks_dongle_destroy_entries();
+
+    /* Update title */
+    if (ks_title_label) {
+        lv_label_set_text(ks_title_label, LV_SYMBOL_LEFT " Scanning...");
+    }
+
+    /* Make title clickable as back button */
+    if (!ks_back_btn && ks_title_label) {
+        lv_obj_add_flag(ks_title_label, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(ks_title_label, ks_dongle_back_cb, LV_EVENT_CLICKED, NULL);
+    }
+
+    int y_pos = 50;
+    int spacing = 38;
+
+    if (count == 0) {
+        /* No keyboards found yet */
+        if (!ks_scanning_label) {
+            ks_scanning_label = lv_label_create(screen_obj);
+            lv_obj_set_style_text_font(ks_scanning_label, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(ks_scanning_label, lv_color_hex(0x808080), 0);
+            lv_label_set_text(ks_scanning_label, "Scanning for keyboards...");
+            lv_obj_align(ks_scanning_label, LV_ALIGN_CENTER, 0, 0);
+        }
+        return;
+    }
+
+    /* Remove "scanning" label if it exists */
+    if (ks_scanning_label) {
+        lv_obj_del(ks_scanning_label);
+        ks_scanning_label = NULL;
+    }
+
+    for (int i = 0; i < count && i < KS_DONGLE_MAX_ENTRIES; i++) {
+        struct ks_dongle_entry *entry = &ks_dongle_entries[i];
+        entry->index = i;
+
+        entry->container = lv_obj_create(screen_obj);
+        lv_obj_set_size(entry->container, 250, 34);
+        lv_obj_set_pos(entry->container, 15, y_pos + (i * spacing));
+        lv_obj_set_style_bg_color(entry->container, lv_color_hex(0x1A1A1A), 0);
+        lv_obj_set_style_bg_opa(entry->container, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(entry->container, 6, 0);
+        lv_obj_set_style_border_color(entry->container, lv_color_hex(0x303030), 0);
+        lv_obj_set_style_border_width(entry->container, 1, 0);
+        lv_obj_set_style_pad_all(entry->container, 0, 0);
+        lv_obj_add_flag(entry->container, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(entry->container, LV_OBJ_FLAG_SCROLLABLE);
+
+        /* BT icon */
+        entry->status_icon = lv_label_create(entry->container);
+        lv_label_set_text(entry->status_icon, LV_SYMBOL_BLUETOOTH);
+        lv_obj_set_style_text_color(entry->status_icon, lv_color_hex(0x4A90E2), 0);
+        lv_obj_set_style_text_font(entry->status_icon, &lv_font_montserrat_14, 0);
+        lv_obj_align(entry->status_icon, LV_ALIGN_LEFT_MID, 8, 0);
+
+        /* Name */
+        entry->name_label = lv_label_create(entry->container);
+        lv_label_set_text(entry->name_label, disc[i].name);
+        lv_obj_set_style_text_color(entry->name_label, lv_color_white(), 0);
+        lv_obj_set_style_text_font(entry->name_label, &lv_font_montserrat_14, 0);
+        lv_obj_align(entry->name_label, LV_ALIGN_LEFT_MID, 28, 0);
+
+        /* RSSI */
+        entry->status_label = lv_label_create(entry->container);
+        char rssi_buf[12];
+        snprintf(rssi_buf, sizeof(rssi_buf), "%ddBm", disc[i].rssi);
+        lv_label_set_text(entry->status_label, rssi_buf);
+        lv_obj_set_style_text_color(entry->status_label, lv_color_hex(0xA0A0A0), 0);
+        lv_obj_set_style_text_font(entry->status_label, &lv_font_montserrat_12, 0);
+        lv_obj_align(entry->status_label, LV_ALIGN_RIGHT_MID, -8, 0);
+
+        /* Click to pair */
+        lv_obj_add_event_cb(entry->container, ks_dongle_discovered_click_cb,
+                           LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+        ks_dongle_entry_count++;
+    }
+}
+
+/* Periodic update for dongle mode keyboard select */
+static void ks_dongle_update_entries(void) {
+    if (ks_dongle_pairing_mode) {
+        /* Refresh discovered keyboards */
+        ks_dongle_destroy_entries();
+        ks_dongle_create_pairing_screen();
+    } else {
+        /* Refresh bonded list with connection status */
+        if (ks_add_new_btn) {
+            lv_obj_del(ks_add_new_btn);
+            ks_add_new_btn = NULL;
+        }
+        ks_dongle_create_bonded_list();
+    }
+}
+
+#endif /* CONFIG_PROSPECTOR_DONGLE_MODE */
+
 /* LVGL timer callback for periodic updates */
 static void ks_update_timer_cb(lv_timer_t *timer) {
     ARG_UNUSED(timer);
@@ -3197,7 +3591,11 @@ static void ks_update_timer_cb(lv_timer_t *timer) {
         return;
     }
 
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+    ks_dongle_update_entries();
+#else
     ks_update_entries();
+#endif
 }
 
 static void destroy_keyboard_select_widgets(void) {
@@ -3209,6 +3607,18 @@ static void destroy_keyboard_select_widgets(void) {
         ks_update_timer = NULL;
     }
 
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+    ks_dongle_destroy_entries();
+    ks_dongle_close_delete_overlay();
+    if (ks_add_new_btn) { lv_obj_del(ks_add_new_btn); ks_add_new_btn = NULL; }
+    if (ks_back_btn) { lv_obj_del(ks_back_btn); ks_back_btn = NULL; }
+    if (ks_scanning_label) { lv_obj_del(ks_scanning_label); ks_scanning_label = NULL; }
+    ks_dongle_pairing_mode = false;
+    /* Exit pairing mode if active */
+    if (hid_central_is_pairing_mode()) {
+        hid_central_exit_pairing_mode();
+    }
+#else
     /* Destroy all keyboard entries */
     for (int i = 0; i < ks_entry_count; i++) {
         ks_destroy_entry(&ks_entries[i]);
@@ -3221,6 +3631,7 @@ static void destroy_keyboard_select_widgets(void) {
     /* Destroy channel selector widgets */
     if (ks_channel_container) { lv_obj_del(ks_channel_container); ks_channel_container = NULL; }
     ks_channel_value = NULL;  /* Deleted with container */
+#endif
 
     /* Destroy other widgets */
     if (ks_nav_hint) { lv_obj_del(ks_nav_hint); ks_nav_hint = NULL; }
@@ -3232,19 +3643,28 @@ static void destroy_keyboard_select_widgets(void) {
 static void create_keyboard_select_widgets(void) {
     LOG_INF("Creating keyboard select widgets...");
 
-    /* Get current selection from scanner_stub.c */
-    ks_selected_keyboard = scanner_get_selected_keyboard();
-    LOG_INF("Current selected keyboard: %d", ks_selected_keyboard);
-
-    /* Title (left side) */
+    /* Title */
     ks_title_label = lv_label_create(screen_obj);
     lv_obj_set_style_text_font(ks_title_label, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(ks_title_label, lv_color_white(), 0);
     lv_label_set_text(ks_title_label, "Keyboards");
     lv_obj_align(ks_title_label, LV_ALIGN_TOP_LEFT, 15, 15);
 
-    /* ========== Channel Badge (right side of header) ========== */
-    /* "Ch:" label + colored badge - tappable */
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+    /* Navigation hint */
+    ks_nav_hint = lv_label_create(screen_obj);
+    lv_obj_set_style_text_font(ks_nav_hint, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(ks_nav_hint, lv_color_hex(0x808080), 0);
+    lv_label_set_text(ks_nav_hint, LV_SYMBOL_DOWN " Main");
+    lv_obj_align(ks_nav_hint, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+    /* Create bonded keyboard list */
+    ks_dongle_create_bonded_list();
+#else
+    /* ========== Scanner Mode: Channel Badge (right side of header) ========== */
+    /* Get current selection from scanner_stub.c */
+    ks_selected_keyboard = scanner_get_selected_keyboard();
+    LOG_INF("Current selected keyboard: %d", ks_selected_keyboard);
 
     /* "Ch:" prefix label - clickable */
     lv_obj_t *ch_prefix = lv_label_create(screen_obj);
@@ -3255,7 +3675,7 @@ static void create_keyboard_select_widgets(void) {
     lv_obj_add_flag(ch_prefix, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(ch_prefix, ks_channel_display_cb, LV_EVENT_CLICKED, NULL);
 
-    /* Channel badge - use simple btn for reliable click */
+    /* Channel badge */
     ks_channel_container = lv_btn_create(screen_obj);
     lv_obj_set_size(ks_channel_container, 36, 24);
     lv_obj_align(ks_channel_container, LV_ALIGN_TOP_RIGHT, -15, 16);
@@ -3265,7 +3685,6 @@ static void create_keyboard_select_widgets(void) {
     lv_obj_set_style_bg_opa(ks_channel_container, LV_OPA_COVER, 0);
     lv_obj_add_event_cb(ks_channel_container, ks_channel_display_cb, LV_EVENT_CLICKED, NULL);
 
-    /* Channel value label (centered in badge) - also clickable, triggers same callback */
     ks_channel_value = lv_label_create(ks_channel_container);
     lv_obj_set_style_text_font(ks_channel_value, &lv_font_montserrat_12, 0);
     lv_obj_center(ks_channel_value);
@@ -3282,11 +3701,12 @@ static void create_keyboard_select_widgets(void) {
 
     /* Create initial keyboard entries */
     ks_update_entries();
+#endif
 
     /* Start update timer (1 second interval) */
     ks_update_timer = lv_timer_create(ks_update_timer_cb, 1000, NULL);
 
-    LOG_INF("Keyboard select widgets created (%d keyboards)", ks_entry_count);
+    LOG_INF("Keyboard select widgets created");
 }
 
 /* ========== Pong Wars Screen ========== */
@@ -3865,12 +4285,15 @@ static void swipe_process_timer_cb(lv_timer_t *timer) {
             create_main_screen_widgets();
             current_screen = SCREEN_MAIN;
             LOG_INF(">>> Transition complete");
-        } else if (current_screen == SCREEN_KEYBOARD_SELECT) {
-            /* Channel decrement on left swipe */
-            ks_close_channel_popup();  /* Close popup if open */
+        }
+#if !IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+        else if (current_screen == SCREEN_KEYBOARD_SELECT) {
+            /* Channel decrement on left swipe (scanner mode only) */
+            ks_close_channel_popup();
             ks_channel_decrement();
             LOG_INF(">>> Keyboard Select: Channel decremented");
         }
+#endif
         break;
 
     case SWIPE_DIRECTION_RIGHT:
@@ -3894,12 +4317,15 @@ static void swipe_process_timer_cb(lv_timer_t *timer) {
             ensure_lvgl_indev_registered();  /* Register for button touch */
             current_screen = SCREEN_SYSTEM_SETTINGS;
             LOG_INF(">>> Transition complete");
-        } else if (current_screen == SCREEN_KEYBOARD_SELECT) {
-            /* Channel increment on right swipe */
-            ks_close_channel_popup();  /* Close popup if open */
+        }
+#if !IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+        else if (current_screen == SCREEN_KEYBOARD_SELECT) {
+            /* Channel increment on right swipe (scanner mode only) */
+            ks_close_channel_popup();
             ks_channel_increment();
             LOG_INF(">>> Keyboard Select: Channel incremented");
         }
+#endif
         break;
 
     default:
