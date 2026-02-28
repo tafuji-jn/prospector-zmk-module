@@ -36,6 +36,15 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
  */
 bool hid_central_is_connected(void);
 
+/**
+ * @brief Consume accumulated keystroke count (atomic read-and-reset).
+ *
+ * Used by display effects (ECG heartbeat) to detect typing activity.
+ *
+ * @return number of keystrokes since last call
+ */
+uint32_t hid_central_consume_keystrokes(void);
+
 #ifdef __cplusplus
 }
 #endif
