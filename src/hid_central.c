@@ -652,6 +652,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
             state = STATE_IDLE;
             schedule_reconnect();
         }
+        zmk_status_scanner_stop();
         zmk_status_scanner_start();
         return;
     }
@@ -736,6 +737,8 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
      * The disconnect was intentional (enter_pairing_mode triggered it). */
     if (pairing_mode) {
         state = STATE_SCANNING;
+        /* stop+start to guarantee scanning is actually running */
+        zmk_status_scanner_stop();
         zmk_status_scanner_start();
         return;
     }
@@ -743,6 +746,7 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     state = STATE_IDLE;
 
     /* Restart scanning now that the connection is gone */
+    zmk_status_scanner_stop();
     zmk_status_scanner_start();
 
     schedule_reconnect();
@@ -1050,11 +1054,9 @@ static void connect_work_handler(struct k_work *work)
         return;
     }
 
-    /* Stop scanning before connecting (Zephyr requirement) */
-    int err = bt_le_scan_stop();
-    if (err) {
-        LOG_WRN("Scan stop failed: %d", err);
-    }
+    /* Stop scanning before connecting (Zephyr requirement).
+     * Use zmk_status_scanner_stop() to keep the scanning flag in sync. */
+    zmk_status_scanner_stop();
 
     /* Ensure kbd_conn is NULL before calling bt_conn_le_create */
     if (kbd_conn) {
@@ -1074,7 +1076,7 @@ static void connect_work_handler(struct k_work *work)
     );
 
     LOG_INF("DONGLE: Connecting to %s", addr_str);
-    err = bt_conn_le_create(&pending_addr, &create_param, &conn_param, &kbd_conn);
+    int err = bt_conn_le_create(&pending_addr, &create_param, &conn_param, &kbd_conn);
     if (err) {
         LOG_ERR("DONGLE: Connect failed: %d", err);
         if (pairing_mode) {
@@ -1083,6 +1085,7 @@ static void connect_work_handler(struct k_work *work)
             state = STATE_IDLE;
             schedule_reconnect();
         }
+        zmk_status_scanner_stop();
         zmk_status_scanner_start();
     }
 }
@@ -1116,8 +1119,8 @@ static void reconnect_work_handler(struct k_work *work)
 
     LOG_INF("Attempting reconnection to bonded keyboard");
 
-    /* Stop any active scan first */
-    bt_le_scan_stop();
+    /* Stop any active scan first (use scanner API to keep flag in sync) */
+    zmk_status_scanner_stop();
 
     state = STATE_CONNECTING;
 
@@ -1137,6 +1140,7 @@ static void reconnect_work_handler(struct k_work *work)
     if (err) {
         LOG_WRN("Reconnect failed: %d", err);
         state = STATE_IDLE;
+        zmk_status_scanner_stop();
         zmk_status_scanner_start();
         schedule_reconnect();
     }
@@ -1470,8 +1474,9 @@ int hid_central_enter_pairing_mode(void)
         bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     }
 
-    /* Start scanning (via status_scanner) */
+    /* Start scanning for discoverable keyboards */
     state = STATE_SCANNING;
+    zmk_status_scanner_stop();
     zmk_status_scanner_start();
 
     return 0;
