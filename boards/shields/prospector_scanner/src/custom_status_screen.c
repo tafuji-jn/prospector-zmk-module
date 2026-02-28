@@ -703,14 +703,14 @@ lv_obj_t *zmk_display_status_screen(void) {
     /* Create layer display - slide mode OR fixed mode (list/over-max) */
     if (ds_layer_slide_mode) {
         /* Slide mode: create 7-slot dial display */
-        create_layer_slide_widgets(screen, 105);
+        create_layer_slide_widgets(screen, 90);
         layer_mode_over_max = false;  /* Not used in slide mode */
     } else if (active_layer >= ds_max_layers) {
         layer_mode_over_max = true;
-        create_over_max_widget(screen, active_layer, 105);
+        create_over_max_widget(screen, active_layer, 90);
     } else {
         layer_mode_over_max = false;
-        create_layer_list_widgets(screen, 105);
+        create_layer_list_widgets(screen, 90);
     }
     LOG_INF("[INIT] layer widget created");
 
@@ -721,16 +721,16 @@ lv_obj_t *zmk_display_status_screen(void) {
     lv_obj_set_width(layer_name_label, 280);
     lv_obj_set_style_text_align(layer_name_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(layer_name_label, cached_layer_name);
-    lv_obj_align(layer_name_label, LV_ALIGN_TOP_MID, 0, 140);
+    lv_obj_align(layer_name_label, LV_ALIGN_TOP_MID, 0, 121);
 
-    /* ===== 6. Modifier Widget (CENTER, y=156) - NerdFont icons ===== */
+    /* ===== 6. Modifier Widget (CENTER, y=140) - NerdFont icons ===== */
     LOG_INF("[INIT] Creating modifier widget with NerdFont...");
     modifier_label = lv_label_create(screen);
-    lv_obj_set_style_text_font(modifier_label, &NerdFonts_Regular_20, 0);
+    lv_obj_set_style_text_font(modifier_label, &NerdFonts_Regular_40, 0);
     lv_obj_set_style_text_color(modifier_label, lv_color_white(), 0);
-    lv_obj_set_style_text_letter_space(modifier_label, 6, 0);  /* Space between icons */
+    lv_obj_set_style_text_letter_space(modifier_label, 10, 0);  /* Space between icons */
     lv_label_set_text(modifier_label, "");  /* Empty initially */
-    lv_obj_align(modifier_label, LV_ALIGN_TOP_MID, 0, 156);
+    lv_obj_align(modifier_label, LV_ALIGN_TOP_MID, 0, 140);
     LOG_INF("[INIT] modifier widget created");
 
     /* ===== 7. Keyboard Battery (dynamic layout for 1-4 batteries) ===== */
@@ -948,7 +948,7 @@ void display_update_scanner_battery(int level) {
 /* Animation callback for horizontal (X) slide - for over-max label (uses align) */
 static void layer_slide_x_anim_cb(void *var, int32_t value) {
     lv_obj_t *obj = (lv_obj_t *)var;
-    lv_obj_align(obj, LV_ALIGN_TOP_MID, value, 105);  /* Keep Y at 105, animate X offset */
+    lv_obj_align(obj, LV_ALIGN_TOP_MID, value, 90);  /* Keep Y at 90, animate X offset */
 }
 
 /* Animation callback for absolute X position - for layer list labels */
@@ -1264,7 +1264,7 @@ static void slide_reset_positions(void) {
             int y_adj = get_slide_slot_y_adj(i);
             int x_offset = get_slide_slot_x_offset(i);
             int x_pos = start_x + (i * SLIDE_SLOT_SPACING) - (label_width / 2) + x_offset;
-            lv_obj_set_pos(layer_slide_labels[i], x_pos, 105 + y_adj);
+            lv_obj_set_pos(layer_slide_labels[i], x_pos, 90 + y_adj);
         }
     }
 }
@@ -1401,7 +1401,7 @@ void display_update_layer(int layer) {
 
     /* ========== Fixed Mode (original behavior) ========== */
     bool should_be_over_max = (layer >= ds_max_layers);
-    int layer_y = 105;  /* Y position for layer widgets */
+    int layer_y = 90;  /* Y position for layer widgets */
 
     /* Determine slide direction based on layer change */
     bool going_up = (layer > prev_layer);  /* Layer increasing = slide from right */
@@ -1898,14 +1898,14 @@ static void create_main_screen_widgets(void) {
     /* Create layer display - slide mode OR fixed mode (list/over-max) */
     if (ds_layer_slide_mode) {
         /* Slide mode: create 7-slot dial display */
-        create_layer_slide_widgets(screen_obj, 105);
+        create_layer_slide_widgets(screen_obj, 90);
         layer_mode_over_max = false;  /* Not used in slide mode */
     } else if (active_layer >= ds_max_layers) {
         layer_mode_over_max = true;
-        create_over_max_widget(screen_obj, active_layer, 105);
+        create_over_max_widget(screen_obj, active_layer, 90);
     } else {
         layer_mode_over_max = false;
-        create_layer_list_widgets(screen_obj, 105);
+        create_layer_list_widgets(screen_obj, 90);
     }
 
     /* Layer name label (below layer numbers) */
@@ -1915,14 +1915,14 @@ static void create_main_screen_widgets(void) {
     lv_obj_set_width(layer_name_label, 280);
     lv_obj_set_style_text_align(layer_name_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(layer_name_label, cached_layer_name);
-    lv_obj_align(layer_name_label, LV_ALIGN_TOP_MID, 0, 140);
+    lv_obj_align(layer_name_label, LV_ALIGN_TOP_MID, 0, 121);
 
     modifier_label = lv_label_create(screen_obj);
-    lv_obj_set_style_text_font(modifier_label, &NerdFonts_Regular_20, 0);
+    lv_obj_set_style_text_font(modifier_label, &NerdFonts_Regular_40, 0);
     lv_obj_set_style_text_color(modifier_label, lv_color_white(), 0);
-    lv_obj_set_style_text_letter_space(modifier_label, 6, 0);  /* Space between icons */
+    lv_obj_set_style_text_letter_space(modifier_label, 10, 0);  /* Space between icons */
     lv_label_set_text(modifier_label, "");
-    lv_obj_align(modifier_label, LV_ALIGN_TOP_MID, 0, 156);
+    lv_obj_align(modifier_label, LV_ALIGN_TOP_MID, 0, 140);
 
     /* === Keyboard battery widgets (4 slots, dynamic layout) === */
     static const int16_t kb_x_offsets_2_r[] = {-70, 70, 0, 0};
