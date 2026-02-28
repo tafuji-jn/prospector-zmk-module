@@ -711,7 +711,6 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 
     bt_conn_unref(kbd_conn);
     kbd_conn = NULL;
-    state = STATE_IDLE;
 
     /* Reset HID subscribe params */
     for (int i = 0; i < MAX_HID_REPORTS; i++) {
@@ -728,6 +727,16 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
         static const uint8_t release_kb[] = {0x01, 0,0,0,0,0,0,0,0};
         usb_hid_forwarder_send(release_kb, sizeof(release_kb));
     }
+
+    /* In pairing mode, keep state=SCANNING and don't auto-reconnect.
+     * The disconnect was intentional (enter_pairing_mode triggered it). */
+    if (pairing_mode) {
+        state = STATE_SCANNING;
+        zmk_status_scanner_start();
+        return;
+    }
+
+    state = STATE_IDLE;
 
     /* Restart scanning now that the connection is gone */
     zmk_status_scanner_start();
@@ -1416,17 +1425,19 @@ int hid_central_enter_pairing_mode(void)
 {
     LOG_INF("Entering pairing mode");
 
-    /* Disconnect current keyboard */
-    if (kbd_conn) {
-        bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-    }
-
+    /* Set pairing flag BEFORE disconnect so disconnected_cb knows
+     * not to auto-reconnect or override state. */
     pairing_mode = true;
     discovered_count = 0;
     memset(discovered_kbds, 0, sizeof(discovered_kbds));
 
     /* Cancel any pending reconnect */
     k_work_cancel_delayable(&reconnect_work);
+
+    /* Disconnect current keyboard (disconnected_cb will see pairing_mode=true) */
+    if (kbd_conn) {
+        bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    }
 
     /* Start scanning (via status_scanner) */
     state = STATE_SCANNING;
