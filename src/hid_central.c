@@ -985,8 +985,7 @@ static void status_subscribe_cb(struct bt_conn *conn, uint8_t err,
                                  struct bt_gatt_subscribe_params *params)
 {
     if (err) {
-        LOG_WRN("Status GATT subscribe failed: %d", err);
-        LOG_WRN("Status GATT subscribe failed - display updates unavailable");
+        LOG_WRN("Status GATT subscribe failed (%d) - display updates unavailable", err);
         return;
     }
 

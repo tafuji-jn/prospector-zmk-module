@@ -113,11 +113,48 @@ ZMK_SUBSCRIPTION(gatt_peripheral_battery, zmk_peripheral_battery_state_changed);
 
 static bool has_subscriber;
 
+/* Forward declaration */
+static void send_status_notify(void);
+
+/* Delayed work for initial notification after subscribe */
+static void initial_notify_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(initial_notify_work, initial_notify_work_handler);
+
+/* Periodic heartbeat work (keeps display fresh even without events) */
+#define GATT_HEARTBEAT_INTERVAL_MS 30000
+static void heartbeat_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(heartbeat_work, heartbeat_work_handler);
+
+static void initial_notify_work_handler(struct k_work *work)
+{
+    LOG_INF("Sending initial GATT status notification");
+    send_status_notify();
+}
+
+static void heartbeat_work_handler(struct k_work *work)
+{
+    if (!has_subscriber) {
+        return;
+    }
+    send_status_notify();
+    k_work_schedule(&heartbeat_work, K_MSEC(GATT_HEARTBEAT_INTERVAL_MS));
+}
+
 static void status_ccc_changed_cb(const struct bt_gatt_attr *attr,
                                    uint16_t value)
 {
     has_subscriber = (value == BT_GATT_CCC_NOTIFY);
     LOG_INF("Status GATT CCC: %s", has_subscriber ? "subscribed" : "unsubscribed");
+
+    if (has_subscriber) {
+        /* Send initial notification after short delay (let BLE settle) */
+        k_work_schedule(&initial_notify_work, K_MSEC(500));
+        /* Start periodic heartbeat */
+        k_work_schedule(&heartbeat_work, K_MSEC(GATT_HEARTBEAT_INTERVAL_MS));
+    } else {
+        k_work_cancel_delayable(&initial_notify_work);
+        k_work_cancel_delayable(&heartbeat_work);
+    }
 }
 
 /* ------------------------------------------------------------------ */
