@@ -185,14 +185,6 @@ config PROSPECTOR_DONGLE_MAX_BONDED
       Maximum number of keyboards that can be bonded simultaneously
       in dongle mode. Must be <= CONFIG_BT_MAX_PAIRED.
 
-config PROSPECTOR_DONGLE_TARGET_NAME
-    string "Target keyboard BLE name (empty = first HID device)"
-    default ""
-    depends on PROSPECTOR_DONGLE_MODE
-    help
-      BLE device name of the target keyboard to connect to.
-      Leave empty to connect to the first HID keyboard found.
-
 config PROSPECTOR_DONGLE_AUTO_RECONNECT
     bool "Auto reconnect to bonded keyboard"
     default y

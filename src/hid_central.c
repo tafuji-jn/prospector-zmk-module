@@ -682,15 +682,10 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     pairing_mode = false;
 
     /* Ensure device name is set (bonded reconnect skips scan callback) */
-    if (connected_kbd_name[0] == '\0') {
-#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
-        const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
-        if (target[0] != '\0') {
-            strncpy(connected_kbd_name, target, sizeof(connected_kbd_name) - 1);
-            connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
-            LOG_INF("Using target name: %s", connected_kbd_name);
-        }
-#endif
+    if (connected_kbd_name[0] == '\0' && has_bonded_addr) {
+        strncpy(connected_kbd_name, bonded_kbds[active_kbd_idx].name,
+                sizeof(connected_kbd_name) - 1);
+        connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
     }
 
     state = STATE_CONNECTING;
@@ -882,27 +877,9 @@ static bool is_hid_service_in_ad(struct net_buf_simple *buf)
     return false;
 }
 
-static bool name_matches_target(const char *name)
+static bool has_known_name(const char *name)
 {
-#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
-    const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
-    if (target[0] == '\0') {
-        return true; /* empty = accept any */
-    }
-
-    if (name == NULL || strcmp(name, "Unknown") == 0) {
-        return false; /* name not yet known from scan response */
-    }
-
-    /* Prefix match: "lotom" matches "lotom", "lotom_left", etc. */
-    if (strncmp(name, target, strlen(target)) == 0) {
-        LOG_INF("Name match: '%s' matches target '%s'", name, target);
-        return true;
-    }
-    return false;
-#else
-    return true;
-#endif
+    return name != NULL && name[0] != '\0' && strcmp(name, "Unknown") != 0;
 }
 
 /* Helper: add a discovered keyboard during pairing mode scan */
@@ -962,57 +939,38 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
         return;
     }
 
-    /* Pairing mode: collect discovered keyboards.
-     * Accept devices that advertise HID Service UUID or whose name
-     * matches the configured target prefix. */
+    /* Pairing mode: show all devices with a known name or HID UUID */
     if (pairing_mode) {
-        if (!is_hid_service_in_ad(buf) && !name_matches_target(name)) {
+        if (!is_hid_service_in_ad(buf) && !has_known_name(name)) {
             return;
         }
         add_to_discovered(addr, name, rssi);
         return;
     }
 
-    /* Normal mode: connect to selected bonded keyboard */
-    if (has_bonded_addr) {
-        if (bt_addr_le_cmp(addr, &bonded_addr) != 0) {
-            return; /* Not our bonded keyboard */
-        }
-        LOG_INF("Bonded addr matched");
-    } else {
-#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
-        const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
-        if (target[0] != '\0') {
-            if (!name_matches_target(name)) {
-                return;
-            }
-        } else
-#endif
-        {
-            if (!is_hid_service_in_ad(buf)) {
-                return;
-            }
-        }
+    /* Normal mode: only connect to the selected bonded keyboard */
+    if (!has_bonded_addr) {
+        return; /* No keyboard selected — use pairing UI */
     }
+    if (bt_addr_le_cmp(addr, &bonded_addr) != 0) {
+        return; /* Not our bonded keyboard */
+    }
+
+    LOG_INF("Bonded addr matched");
 
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(addr, addr_str, sizeof(addr_str));
     LOG_INF("DONGLE: Target found: %s", addr_str);
 
-    /* Capture device name for GATT-based status display */
-    if (name && strcmp(name, "Unknown") != 0) {
+    /* Capture device name for display */
+    if (has_known_name(name)) {
         strncpy(connected_kbd_name, name, sizeof(connected_kbd_name) - 1);
         connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
     } else if (connected_kbd_name[0] == '\0') {
-        /* Bonded reconnection: name not yet known from scan response.
-         * Use target name as fallback. */
-#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
-        const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
-        if (target[0] != '\0') {
-            strncpy(connected_kbd_name, target, sizeof(connected_kbd_name) - 1);
-            connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
-        }
-#endif
+        /* Use saved name from bonded list */
+        strncpy(connected_kbd_name, bonded_kbds[active_kbd_idx].name,
+                sizeof(connected_kbd_name) - 1);
+        connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
     }
 
     /* Defer connection to work queue – bt_conn_le_create must NOT be
@@ -1198,16 +1156,11 @@ static uint8_t status_notify_cb(struct bt_conn *conn,
         }
     }
 
-    /* Ensure name is available — last-resort fallback to target name */
-    if (connected_kbd_name[0] == '\0') {
-#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
-        const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
-        if (target[0] != '\0') {
-            strncpy(connected_kbd_name, target, sizeof(connected_kbd_name) - 1);
-            connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
-            LOG_INF("GATT notify: name was empty, set to '%s'", connected_kbd_name);
-        }
-#endif
+    /* Ensure name is available — use saved bonded name as fallback */
+    if (connected_kbd_name[0] == '\0' && has_bonded_addr) {
+        strncpy(connected_kbd_name, bonded_kbds[active_kbd_idx].name,
+                sizeof(connected_kbd_name) - 1);
+        connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
     }
 
     LOG_INF("GATT notify: layer=%d(%s) mod=0x%02x bat=%d%% name='%s'",
@@ -1365,14 +1318,10 @@ static uint8_t status_read_cb(struct bt_conn *conn, uint8_t err,
         }
     }
 
-    if (connected_kbd_name[0] == '\0') {
-#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
-        const char *target = CONFIG_PROSPECTOR_DONGLE_TARGET_NAME;
-        if (target[0] != '\0') {
-            strncpy(connected_kbd_name, target, sizeof(connected_kbd_name) - 1);
-            connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
-        }
-#endif
+    if (connected_kbd_name[0] == '\0' && has_bonded_addr) {
+        strncpy(connected_kbd_name, bonded_kbds[active_kbd_idx].name,
+                sizeof(connected_kbd_name) - 1);
+        connected_kbd_name[sizeof(connected_kbd_name) - 1] = '\0';
     }
 
     LOG_DBG("GATT poll: layer=%d(%s) mod=0x%02x bat=%d%%",
@@ -1652,9 +1601,6 @@ static int hid_central_init(void)
     } else {
         state = STATE_SCANNING;
     }
-#ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
-    LOG_INF("DONGLE: target='%s'", CONFIG_PROSPECTOR_DONGLE_TARGET_NAME);
-#endif
     return 0;
 }
 
