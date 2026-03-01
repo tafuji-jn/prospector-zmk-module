@@ -939,24 +939,10 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
     }
 
     /* Pairing mode: collect discovered keyboards.
-     * Accept any connectable device that has HID UUID, matches target name,
-     * or has a known device name (not "Unknown").  This is deliberately
-     * permissive because ZMK keyboards may not advertise HID UUID in their
-     * AD data, and names arrive via SCAN_RSP which may come later. */
+     * Accept devices that advertise HID Service UUID or whose name
+     * matches the configured target prefix. */
     if (pairing_mode) {
-        bool dominated = false;
-        if (is_hid_service_in_ad(buf)) {
-            dominated = true;
-        }
-        if (name_matches_target(name)) {
-            dominated = true;
-        }
-        /* Accept any device with a real name (not "Unknown") as a
-         * candidate — the user can visually filter on the pairing screen. */
-        if (name && strcmp(name, "Unknown") != 0 && name[0] != '\0') {
-            dominated = true;
-        }
-        if (!dominated) {
+        if (!is_hid_service_in_ad(buf) && !name_matches_target(name)) {
             return;
         }
         add_to_discovered(addr, name, rssi);
