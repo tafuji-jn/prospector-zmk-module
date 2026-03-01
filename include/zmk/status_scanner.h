@@ -154,15 +154,6 @@ void status_scanner_update_from_gatt(const bt_addr_le_t *addr,
  * @param rssi  Latest RSSI reading
  */
 void status_scanner_update_rssi(const bt_addr_le_t *addr, int8_t rssi);
-
-/**
- * @brief Clear all tracked keyboard status data
- *
- * Called by hid_central.c when switching to a different keyboard.
- * Resets all keyboard slots so stale data from the previous keyboard
- * is not displayed while waiting for the new keyboard's GATT data.
- */
-void zmk_status_scanner_clear_all(void);
 #endif
 
 #ifdef __cplusplus

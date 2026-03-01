@@ -846,19 +846,6 @@ void status_scanner_update_from_gatt(const bt_addr_le_t *addr,
     }
 }
 
-void zmk_status_scanner_clear_all(void)
-{
-    if (scanner_lock(K_MSEC(50)) != 0) {
-        LOG_WRN("clear_all: mutex busy");
-        return;
-    }
-
-    memset(keyboards, 0, sizeof(keyboards));
-    scanner_unlock();
-
-    LOG_INF("All keyboard status slots cleared");
-}
-
 void status_scanner_update_rssi(const bt_addr_le_t *addr, int8_t rssi)
 {
     if (scanner_lock(K_MSEC(5)) != 0) {
