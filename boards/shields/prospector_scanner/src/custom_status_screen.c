@@ -650,6 +650,25 @@ static void pending_update_timer_cb(lv_timer_t *timer) {
     if (scanner_get_pending_battery(&scanner_bat)) {
         display_update_scanner_battery(scanner_bat);
     }
+
+#if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
+    /* Dongle mode: detect disconnect even when no new data arrives.
+     * scanner_signal_gatt stays true after disconnect because no new
+     * GATT updates come in to clear it. Check actively here. */
+    if (scanner_signal_gatt && !hid_central_is_connected()) {
+        scanner_signal_gatt = false;
+        /* Update signal display to show disconnected state */
+        if (rssi_bar) {
+            lv_bar_set_value(rssi_bar, 0, LV_ANIM_OFF);
+        }
+        if (rssi_label) {
+            lv_label_set_text(rssi_label, "---");
+        }
+        if (rate_label) {
+            lv_label_set_text(rate_label, "Discon.");
+        }
+    }
+#endif
 }
 
 /* ========== Main Screen Creation (NO CONTAINERS) ========== */
