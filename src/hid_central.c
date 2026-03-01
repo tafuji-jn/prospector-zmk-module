@@ -939,9 +939,9 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
         return;
     }
 
-    /* Pairing mode: show all devices with a known name or HID UUID */
+    /* Pairing mode: only show devices advertising HID Service */
     if (pairing_mode) {
-        if (!is_hid_service_in_ad(buf) && !has_known_name(name)) {
+        if (!is_hid_service_in_ad(buf)) {
             return;
         }
         add_to_discovered(addr, name, rssi);
