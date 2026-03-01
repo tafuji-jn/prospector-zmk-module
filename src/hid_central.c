@@ -122,6 +122,16 @@ static int dongle_settings_set(const char *name, size_t len,
         return 0;
     }
 
+    /* Keys: "addr/0", "addr/1", ... */
+    if (!strncmp(name, "addr/", 5)) {
+        int idx = name[5] - '0';
+        if (idx >= 0 && idx < MAX_BONDED_KBD && len == sizeof(bt_addr_le_t)) {
+            read_cb(cb_arg, &bonded_kbds[idx].addr, sizeof(bt_addr_le_t));
+            bonded_kbds[idx].valid = true;
+        }
+        return 0;
+    }
+
     return -ENOENT;
 }
 
@@ -134,6 +144,13 @@ static void save_bonded_name(int idx)
     snprintf(key, sizeof(key), "dongle/name/%d", idx);
     settings_save_one(key, bonded_kbds[idx].name,
                       strlen(bonded_kbds[idx].name) + 1);
+}
+
+static void save_bonded_addr(int idx)
+{
+    char key[24];
+    snprintf(key, sizeof(key), "dongle/addr/%d", idx);
+    settings_save_one(key, &bonded_kbds[idx].addr, sizeof(bt_addr_le_t));
 }
 
 static void save_active_index(void)
@@ -802,6 +819,7 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
             bonded_kbds[idx].valid = true;
             bonded_count++;
             LOG_INF("New bond added at index %d", idx);
+            save_bonded_addr(idx);
         }
         if (idx >= 0) {
             /* Save name captured during scan */
@@ -1564,15 +1582,17 @@ int hid_central_unpair(int bonded_index)
     /* Remove from our array by shifting entries down */
     for (int i = bonded_index; i < bonded_count - 1; i++) {
         bonded_kbds[i] = bonded_kbds[i + 1];
-        /* Re-save shifted name */
         save_bonded_name(i);
+        save_bonded_addr(i);
     }
     bonded_count--;
     memset(&bonded_kbds[bonded_count], 0, sizeof(bonded_kbds[bonded_count]));
 
-    /* Clear old name slot */
+    /* Clear old slots */
     char key[24];
     snprintf(key, sizeof(key), "dongle/name/%d", bonded_count);
+    settings_delete(key);
+    snprintf(key, sizeof(key), "dongle/addr/%d", bonded_count);
     settings_delete(key);
 
     /* Adjust active index */
@@ -1689,23 +1709,36 @@ static void test_psa_import(void)
     psa_reset_key_attributes(&attr);
 }
 
-/* Callback for bt_foreach_bond: restore bonded keyboard addresses */
+/* Temporary flag array for bond verification */
+static bool bond_verified[MAX_BONDED_KBD];
+
+/* Callback for bt_foreach_bond: verify that our saved entries still have
+ * a corresponding bond in the BT stack.  Addresses and names are already
+ * restored by settings_load (dongle/addr/N, dongle/name/N). */
 static void bond_found_cb(const struct bt_bond_info *info, void *user_data)
 {
-    if (bonded_count >= MAX_BONDED_KBD) {
-        return;
-    }
-
-    bt_addr_le_copy(&bonded_kbds[bonded_count].addr, &info->addr);
-    bonded_kbds[bonded_count].valid = true;
-    /* name is restored by settings_load via dongle_settings_set */
-
     char addr_str[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(&info->addr, addr_str, sizeof(addr_str));
-    printk("*** DONGLE: Restored bond[%d]: %s name='%s' ***\n",
-           bonded_count, addr_str, bonded_kbds[bonded_count].name);
 
-    bonded_count++;
+    for (int i = 0; i < bonded_count; i++) {
+        if (bonded_kbds[i].valid &&
+            bt_addr_le_cmp(&info->addr, &bonded_kbds[i].addr) == 0) {
+            bond_verified[i] = true;
+            printk("*** DONGLE: Verified bond[%d]: %s name='%s' ***\n",
+                   i, addr_str, bonded_kbds[i].name);
+            return;
+        }
+    }
+
+    /* Bond exists in BT stack but not in our saved list — add it */
+    if (bonded_count < MAX_BONDED_KBD) {
+        bt_addr_le_copy(&bonded_kbds[bonded_count].addr, &info->addr);
+        bonded_kbds[bonded_count].valid = true;
+        bond_verified[bonded_count] = true;
+        printk("*** DONGLE: New bond[%d]: %s (no saved name) ***\n",
+               bonded_count, addr_str);
+        bonded_count++;
+    }
 }
 
 #if !IS_ENABLED(CONFIG_ZMK_BLE)
@@ -1720,10 +1753,37 @@ static int dongle_bt_enable(void)
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     settings_load();
-    /* Restore bonded keyboard address from NVS so we connect by address,
-     * not by name.  Without this, has_bonded_addr is always false at boot
-     * and name-matching ("lotom") could connect to the wrong split half. */
+
+    /* Count entries restored from settings (addr/N sets valid=true) */
+    bonded_count = 0;
+    for (int i = 0; i < MAX_BONDED_KBD; i++) {
+        if (bonded_kbds[i].valid) {
+            bonded_count = i + 1;
+        }
+    }
+
+    /* Verify saved entries against actual BT bonds */
+    memset(bond_verified, 0, sizeof(bond_verified));
     bt_foreach_bond(BT_ID_DEFAULT, bond_found_cb, NULL);
+
+    /* Remove entries whose bond was deleted externally */
+    for (int i = bonded_count - 1; i >= 0; i--) {
+        if (!bond_verified[i]) {
+            printk("*** DONGLE: Pruning stale bond[%d]: name='%s' ***\n",
+                   i, bonded_kbds[i].name);
+            /* Shift remaining entries down */
+            for (int j = i; j < bonded_count - 1; j++) {
+                bonded_kbds[j] = bonded_kbds[j + 1];
+                save_bonded_name(j);
+                save_bonded_addr(j);
+            }
+            bonded_count--;
+            memset(&bonded_kbds[bonded_count], 0, sizeof(bonded_kbds[bonded_count]));
+        }
+    }
+
+    printk("*** DONGLE: %d bonded keyboard(s), active=%d ***\n",
+           bonded_count, active_kbd_idx);
 #endif
 
     return 0;
