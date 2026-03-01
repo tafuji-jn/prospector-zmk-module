@@ -1397,6 +1397,9 @@ int hid_central_select_keyboard(int index)
 
     LOG_INF("Switching to keyboard[%d]: %s", index, bonded_kbds[index].name);
 
+    /* Clear stale status data from previous keyboard */
+    zmk_status_scanner_clear_all();
+
     /* Disconnect current keyboard if connected */
     if (kbd_conn) {
         bt_conn_disconnect(kbd_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
