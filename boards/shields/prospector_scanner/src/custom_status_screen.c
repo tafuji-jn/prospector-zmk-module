@@ -393,6 +393,7 @@ struct ks_dongle_entry {
 #define KS_DONGLE_MAX_ENTRIES 5
 static struct ks_dongle_entry ks_dongle_entries[KS_DONGLE_MAX_ENTRIES] = {0};
 static int ks_dongle_entry_count = 0;
+static int ks_dongle_last_discovered_count = -1;
 
 /* Forward declarations for dongle mode */
 static void ks_dongle_entry_click_cb(lv_event_t *e);
@@ -3568,8 +3569,6 @@ static void ks_dongle_create_pairing_screen(void) {
     }
 }
 
-/* Track last displayed discovered count to avoid unnecessary recreation */
-static int ks_dongle_last_discovered_count = -1;
 
 /* Periodic update for dongle mode keyboard select */
 static void ks_dongle_update_entries(void) {
