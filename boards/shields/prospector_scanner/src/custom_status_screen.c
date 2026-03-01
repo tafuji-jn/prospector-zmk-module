@@ -3318,6 +3318,10 @@ static void ks_dongle_show_delete_confirm(int bonded_index, const char *name) {
 
 /* Click handler for bonded keyboard entry */
 static void ks_dongle_entry_click_cb(lv_event_t *e) {
+    /* Ignore click if delete confirmation is showing (long-press also fires click) */
+    if (ks_delete_overlay) {
+        return;
+    }
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     LOG_INF("Dongle keyboard selected: bonded[%d]", idx);
     hid_central_select_keyboard(idx);
@@ -3599,6 +3603,10 @@ static void ks_dongle_update_entries(void) {
             }
         }
     } else {
+        /* Don't rebuild while delete confirmation is showing */
+        if (ks_delete_overlay) {
+            return;
+        }
         /* Refresh bonded list with connection status */
         if (ks_add_new_btn) {
             lv_obj_del(ks_add_new_btn);
