@@ -383,6 +383,33 @@ static void schedule_display_update(void) {
 
 /* ========== Scanner Message Functions ========== */
 
+void scanner_clear_display_data(void)
+{
+    /* Clear cached keyboard data */
+    if (mutex_initialized && k_mutex_lock(&data_mutex, K_MSEC(50)) == 0) {
+        memset(keyboards, 0, sizeof(keyboards));
+        k_mutex_unlock(&data_mutex);
+    }
+
+    /* Trigger display update to show "Scanning..." state */
+    pending_data.no_keyboards = true;
+    pending_data.gatt_connected = false;
+    pending_data.update_pending = true;
+
+    /* Clear signal display */
+    scanner_signal_gatt = false;
+    set_signal_data(-100, -1.0f);
+    pending_data.signal_update_pending = true;
+
+    /* Reset rate calculation */
+    rate_last_calc_time = 0;
+    atomic_set(&adv_receive_count, 0);
+    rate_history_filled = false;
+    rate_history_idx = 0;
+
+    LOG_INF("Display data cleared");
+}
+
 int scanner_msg_send_keyboard_data(const struct zmk_status_adv_data *adv_data,
                                    int8_t rssi, const char *device_name,
                                    const uint8_t *ble_addr, uint8_t ble_addr_type,

@@ -35,3 +35,12 @@ int scanner_msg_send_keyboard_data(const struct zmk_status_adv_data *adv_data,
  * @return 0 on success, negative error code on failure
  */
 int scanner_msg_send_timeout_check(void);
+
+/**
+ * @brief Clear pending display data and show "Scanning..." state
+ *
+ * Called when switching keyboards to clear stale display data from
+ * the previous keyboard. Triggers a display update to show the
+ * "Scanning..." state until new GATT data arrives.
+ */
+void scanner_clear_display_data(void);

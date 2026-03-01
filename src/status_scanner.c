@@ -756,6 +756,11 @@ void zmk_status_scanner_clear_all(void)
     }
 
     scanner_unlock();
+
+    /* Also clear display-side cached data so the UI shows "Scanning..."
+     * instead of stale data from the previous keyboard. */
+    scanner_clear_display_data();
+
     LOG_INF("All keyboard status slots cleared");
 }
 
