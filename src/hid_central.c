@@ -661,6 +661,9 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr_str, sizeof(addr_str));
     LOG_INF("DONGLE: Connected to %s", addr_str);
 
+    /* Connection established — leave pairing mode if active */
+    pairing_mode = false;
+
     /* Ensure device name is set (bonded reconnect skips scan callback) */
     if (connected_kbd_name[0] == '\0') {
 #ifdef CONFIG_PROSPECTOR_DONGLE_TARGET_NAME
@@ -811,6 +814,9 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
             active_kbd_idx = idx;
             save_active_index();
         }
+
+        /* Pairing succeeded — leave pairing mode */
+        pairing_mode = false;
 
         if (discover_after_security) {
             discover_after_security = false;
@@ -1514,7 +1520,11 @@ int hid_central_pair_with(int discovered_index)
     LOG_INF("Pairing with discovered[%d]: %s", discovered_index,
             discovered_kbds[discovered_index].name);
 
-    pairing_mode = false;
+    /* Keep pairing_mode = true during the connection attempt.
+     * This prevents the normal scan flow from re-matching the target
+     * and entering an infinite connect-timeout loop if pairing fails.
+     * pairing_mode is cleared in security_changed_cb on success,
+     * or stays true so connected_cb error path won't auto-reconnect. */
 
     /* Capture name for the new bond */
     strncpy(connected_kbd_name, discovered_kbds[discovered_index].name,
