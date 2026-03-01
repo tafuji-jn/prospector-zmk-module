@@ -130,7 +130,7 @@ SETTINGS_STATIC_HANDLER_DEFINE(dongle, "dongle", NULL,
 
 static void save_bonded_name(int idx)
 {
-    char key[16];
+    char key[24];
     snprintf(key, sizeof(key), "dongle/name/%d", idx);
     settings_save_one(key, bonded_kbds[idx].name,
                       strlen(bonded_kbds[idx].name) + 1);
@@ -1561,7 +1561,7 @@ int hid_central_unpair(int bonded_index)
     memset(&bonded_kbds[bonded_count], 0, sizeof(bonded_kbds[bonded_count]));
 
     /* Clear old name slot */
-    char key[16];
+    char key[24];
     snprintf(key, sizeof(key), "dongle/name/%d", bonded_count);
     settings_delete(key);
 
