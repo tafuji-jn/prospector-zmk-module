@@ -740,6 +740,25 @@ int zmk_status_scanner_get_primary_keyboard(void) {
     return primary;
 }
 
+void zmk_status_scanner_clear_all(void)
+{
+    if (scanner_lock(K_MSEC(50)) != 0) {
+        LOG_WRN("clear_all: mutex busy");
+        return;
+    }
+
+    for (int i = 0; i < ZMK_STATUS_SCANNER_MAX_KEYBOARDS; i++) {
+        keyboards[i].active = false;
+        memset(&keyboards[i].data, 0, sizeof(keyboards[i].data));
+        memset(keyboards[i].ble_name, 0, sizeof(keyboards[i].ble_name));
+        memset(keyboards[i].ble_addr, 0, sizeof(keyboards[i].ble_addr));
+        keyboards[i].layer_name[0] = '\0';
+    }
+
+    scanner_unlock();
+    LOG_INF("All keyboard status slots cleared");
+}
+
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
 
 void status_scanner_update_from_gatt(const bt_addr_le_t *addr,

@@ -117,6 +117,14 @@ int zmk_status_scanner_get_active_count(void);
  */
 int zmk_status_scanner_get_primary_keyboard(void);
 
+/**
+ * @brief Clear all keyboard status slots
+ *
+ * Resets every slot so the display shows no stale data from a
+ * previously connected keyboard.
+ */
+void zmk_status_scanner_clear_all(void);
+
 #if IS_ENABLED(CONFIG_PROSPECTOR_DONGLE_MODE)
 /**
  * @brief Update keyboard status from GATT notification data
