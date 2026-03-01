@@ -848,7 +848,7 @@ BT_CONN_CB_DEFINE(hid_central_conn_cb) = {
 /* Scan result handler (called from status_scanner scan_callback)     */
 /* ------------------------------------------------------------------ */
 
-static bool is_hid_service_in_ad(struct net_buf_simple *buf)
+static bool is_hid_device_in_ad(struct net_buf_simple *buf)
 {
     struct net_buf_simple ad = *buf;
 
@@ -861,7 +861,7 @@ static bool is_hid_service_in_ad(struct net_buf_simple *buf)
         uint8_t ad_type = net_buf_simple_pull_u8(&ad);
         len--;
 
-        /* Check complete/incomplete 16-bit UUID lists */
+        /* Check complete/incomplete 16-bit UUID lists for HID Service */
         if ((ad_type == BT_DATA_UUID16_ALL ||
              ad_type == BT_DATA_UUID16_SOME) && len >= 2) {
             for (int i = 0; i + 1 < len; i += 2) {
@@ -869,6 +869,14 @@ static bool is_hid_service_in_ad(struct net_buf_simple *buf)
                 if (uuid == 0x1812) { /* HID Service */
                     return true;
                 }
+            }
+        }
+
+        /* Check GAP Appearance for HID category (0x03C0-0x03FF) */
+        if (ad_type == BT_DATA_GAP_APPEARANCE && len >= 2) {
+            uint16_t appearance = ad.data[0] | ((uint16_t)ad.data[1] << 8);
+            if ((appearance & 0xFFC0) == 0x03C0) { /* HID subclass */
+                return true;
             }
         }
 
@@ -939,9 +947,9 @@ void hid_central_on_scan_result(const bt_addr_le_t *addr, int8_t rssi,
         return;
     }
 
-    /* Pairing mode: show devices with HID UUID in ad, or known name */
+    /* Pairing mode: only show HID devices (UUID or Appearance) */
     if (pairing_mode) {
-        if (!is_hid_service_in_ad(buf) && !has_known_name(name)) {
+        if (!is_hid_device_in_ad(buf)) {
             return;
         }
         add_to_discovered(addr, name, rssi);
