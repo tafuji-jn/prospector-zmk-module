@@ -3337,6 +3337,7 @@ static void ks_dongle_entry_longpress_cb(lv_event_t *e) {
 static void ks_dongle_add_new_cb(lv_event_t *e) {
     LOG_INF("Entering pairing mode");
     ks_dongle_pairing_mode = true;
+    ks_dongle_last_discovered_count = -1;  /* Force rebuild on first update */
     hid_central_enter_pairing_mode();
     /* Rebuild the screen */
     ks_dongle_destroy_entries();
@@ -3348,6 +3349,7 @@ static void ks_dongle_add_new_cb(lv_event_t *e) {
 static void ks_dongle_back_cb(lv_event_t *e) {
     LOG_INF("Exiting pairing mode");
     ks_dongle_pairing_mode = false;
+    ks_dongle_last_discovered_count = -1;
     hid_central_exit_pairing_mode();
     /* Rebuild the bonded list */
     ks_dongle_destroy_entries();
@@ -3363,6 +3365,7 @@ static void ks_dongle_discovered_click_cb(lv_event_t *e) {
     hid_central_pair_with(idx);
     /* Switch back to bonded view after pairing initiated */
     ks_dongle_pairing_mode = false;
+    ks_dongle_last_discovered_count = -1;
     ks_dongle_destroy_entries();
     if (ks_back_btn) { lv_obj_del(ks_back_btn); ks_back_btn = NULL; }
     if (ks_scanning_label) { lv_obj_del(ks_scanning_label); ks_scanning_label = NULL; }
@@ -3565,12 +3568,37 @@ static void ks_dongle_create_pairing_screen(void) {
     }
 }
 
+/* Track last displayed discovered count to avoid unnecessary recreation */
+static int ks_dongle_last_discovered_count = -1;
+
 /* Periodic update for dongle mode keyboard select */
 static void ks_dongle_update_entries(void) {
     if (ks_dongle_pairing_mode) {
-        /* Refresh discovered keyboards */
-        ks_dongle_destroy_entries();
-        ks_dongle_create_pairing_screen();
+        /* Check if discovered list has changed */
+        struct discovered_keyboard_info disc[KS_DONGLE_MAX_ENTRIES];
+        int count = hid_central_get_discovered_keyboards(disc, KS_DONGLE_MAX_ENTRIES);
+
+        if (count != ks_dongle_last_discovered_count) {
+            /* Count changed — full rebuild needed */
+            ks_dongle_last_discovered_count = count;
+            ks_dongle_destroy_entries();
+            ks_dongle_create_pairing_screen();
+        } else {
+            /* Same count — update labels in place (RSSI, name) */
+            for (int i = 0; i < count && i < ks_dongle_entry_count; i++) {
+                struct ks_dongle_entry *entry = &ks_dongle_entries[i];
+                if (!entry->container) continue;
+
+                if (entry->name_label) {
+                    lv_label_set_text(entry->name_label, disc[i].name);
+                }
+                if (entry->status_label) {
+                    char rssi_buf[12];
+                    snprintf(rssi_buf, sizeof(rssi_buf), "%ddBm", disc[i].rssi);
+                    lv_label_set_text(entry->status_label, rssi_buf);
+                }
+            }
+        }
     } else {
         /* Refresh bonded list with connection status */
         if (ks_add_new_btn) {
